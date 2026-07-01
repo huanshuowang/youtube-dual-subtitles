@@ -96,6 +96,19 @@
       return;
     }
 
+    // YouTube prefetches captions for autoplay/recommended/hover-preview videos.
+    // Only accept the track whose v= matches the video the user is watching,
+    // otherwise a later prefetch will overwrite preCues and blank the overlay.
+    // Read location.search fresh — during SPA nav, STATE.videoId may lag the URL.
+    const vMatch = /[?&]v=([^&]+)/.exec(url);
+    const trackVideoId = vMatch ? vMatch[1] : null;
+    const pageVideoIdMatch = /[?&]v=([^&]+)/.exec(location.search);
+    const pageVideoId = pageVideoIdMatch ? pageVideoIdMatch[1] : null;
+    if (trackVideoId && pageVideoId && trackVideoId !== pageVideoId) {
+      log("intercept: skipping track for other video", trackVideoId, "current", pageVideoId);
+      return;
+    }
+
     const rawCues = parseCaptions(text);
     if (!rawCues.length) return;
     // Merge cues that YouTube split mid-sentence so Google Translate sees

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Dual Subtitles",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "在 YouTube 上同时显示两种语言的字幕（原生字幕 + 叠加的第二语言字幕）。",
   "permissions": ["storage", "scripting"],
   "host_permissions": [

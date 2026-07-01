@@ -45,12 +45,23 @@
     nav .container { display: flex; align-items: center; justify-content: space-between; }
     .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
     .logo-mark {
-      width: 28px; height: 28px; border-radius: 6px;
-      background: var(--brand);
-      display: inline-flex; align-items: center; justify-content: center;
-      color: white; font-weight: 800; font-size: 13px;
+      width: 28px; height: 28px;
+      display: block;
     }
     nav a.gh { color: var(--text-dim); font-size: 14px; }
+    .lang-toggle {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 5px 12px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      margin-right: 12px;
+    }
+    .lang-toggle:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+    .nav-right { display: flex; align-items: center; }
 
     /* Hero */
     .hero { padding: 80px 0 60px; text-align: center; }
@@ -282,26 +293,29 @@
   <nav>
     <div class="container">
       <div class="logo">
-        <span class="logo-mark">双</span>
+        <img class="logo-mark" src="../icons/icon128.png" alt="" />
         <span>YouTube Dual Subtitles</span>
       </div>
-      <a class="gh" href="https://github.com/huanshuowang/youtube-dual-subtitles" target="_blank" rel="noopener">
-        View on GitHub →
-      </a>
+      <div class="nav-right">
+        <button class="lang-toggle" id="langToggle" type="button" aria-label="Switch language">EN</button>
+        <a class="gh" href="https://github.com/huanshuowang/youtube-dual-subtitles" target="_blank" rel="noopener">
+          View on GitHub →
+        </a>
+      </div>
     </div>
   </nav>
 
   <header class="hero">
     <div class="container">
-      <h1>YouTube 也能双语字幕</h1>
-      <p class="sub">
+      <h1 data-en="Dual subtitles for YouTube">YouTube 也能双语字幕</h1>
+      <p class="sub" data-en="A free Chrome extension that overlays a second-language translation on top of YouTube's own captions. Watch foreign videos and learn languages without switching back and forth.">
         免费的 Chrome 扩展，在 YouTube 视频里同时显示原生字幕 + 任意第二语言翻译。
         看外语视频学语言、追国外内容不再切来切去。
       </p>
-      <a class="cta" href="https://github.com/huanshuowang/youtube-dual-subtitles/archive/refs/heads/main.zip">
+      <a class="cta" href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles.zip" data-en="Download extension ⬇">
         下载扩展 ⬇
       </a>
-      <a class="cta-secondary" href="#install">如何安装</a>
+      <a class="cta-secondary" href="#install" data-en="How to install">如何安装</a>
 
       <div class="preview">
         <div>
@@ -311,7 +325,7 @@
           <div class="preview-caption-en">To be, or not to be, that is the question</div>
         </div>
       </div>
-      <p class="preview-note">
+      <p class="preview-note" data-en="↑ Second-language translation overlaid by the extension · ↓ YouTube's native caption">
         ↑ 扩展叠加的第二语言翻译 · ↓ YouTube 原生字幕
       </p>
     </div>
@@ -319,38 +333,38 @@
 
   <section id="features">
     <div class="container">
-      <h2>为什么用它</h2>
-      <p class="section-desc">主流 YouTube 双语扩展的痛点，这里全解决了。</p>
+      <h2 data-en="Why use it">为什么用它</h2>
+      <p class="section-desc" data-en="The rough edges of other YouTube dual-subtitle extensions, fixed.">主流 YouTube 双语扩展的痛点，这里全解决了。</p>
       <div class="features">
         <div class="feature">
           <div class="icon">⚡</div>
-          <h3>零延迟同步</h3>
-          <p>截获 YouTube 播放器自己的字幕请求，整片提前翻译，跟视频时间轴精确对齐，不再"中文永远慢半拍"。</p>
+          <h3 data-en="Zero-lag sync">零延迟同步</h3>
+          <p data-en="Intercepts YouTube's own caption request and translates the whole track upfront, so the second language stays perfectly aligned with the video timeline — no more half-second lag.">截获 YouTube 播放器自己的字幕请求，整片提前翻译，跟视频时间轴精确对齐，不再"中文永远慢半拍"。</p>
         </div>
         <div class="feature">
           <div class="icon">🎯</div>
-          <h3>整句翻译</h3>
-          <p>合并 ASR 把一句话切成两半的碎片再翻译，得到完整语境下的准确译文，翻译质量比同类扩展更好。</p>
+          <h3 data-en="Full-sentence translation">整句翻译</h3>
+          <p data-en="Merges the ASR fragments that split a sentence in half before translating, so Google Translate sees the full clause. Translations end up noticeably cleaner than most alternatives.">合并 ASR 把一句话切成两半的碎片再翻译，得到完整语境下的准确译文，翻译质量比同类扩展更好。</p>
         </div>
         <div class="feature">
           <div class="icon">🖱️</div>
-          <h3>悬停拖动字幕位置</h3>
-          <p>鼠标碰到字幕就浮出拖拽把手，按住上下拖，全屏也能调，不用来回开设置面板。</p>
+          <h3 data-en="Drag to reposition">悬停拖动字幕位置</h3>
+          <p data-en="Hover the subtitle and a drag handle appears — press and drag vertically to reposition, fullscreen included. No trip to a settings panel.">鼠标碰到字幕就浮出拖拽把手，按住上下拖，全屏也能调，不用来回开设置面板。</p>
         </div>
         <div class="feature">
           <div class="icon">🌍</div>
-          <h3>100+ 种语言</h3>
-          <p>支持 Google Translate 全部目标语言，中文简繁、日文、韩文、西语、法语等都能选，一键切换。</p>
+          <h3 data-en="100+ languages">100+ 种语言</h3>
+          <p data-en="Supports every target language Google Translate offers — Simplified/Traditional Chinese, Japanese, Korean, Spanish, French and more, switchable in one click.">支持 Google Translate 全部目标语言，中文简繁、日文、韩文、西语、法语等都能选，一键切换。</p>
         </div>
         <div class="feature">
           <div class="icon">🔐</div>
-          <h3>无需登录 · 无 API Key</h3>
-          <p>用免费的 Google Translate 端点，装完就能用。不上传数据，代码全开源。</p>
+          <h3 data-en="No login · No API key">无需登录 · 无 API Key</h3>
+          <p data-en="Uses the free Google Translate endpoint — works the moment you install it. No data is uploaded, and the source is fully open.">用免费的 Google Translate 端点，装完就能用。不上传数据，代码全开源。</p>
         </div>
         <div class="feature">
           <div class="icon">🎨</div>
-          <h3>样式可调</h3>
-          <p>字号、颜色、背景透明度、垂直位置随你调，还能实时预览。</p>
+          <h3 data-en="Customizable style">样式可调</h3>
+          <p data-en="Font size, color, background opacity and vertical position are all adjustable, with a live preview.">字号、颜色、背景透明度、垂直位置随你调，还能实时预览。</p>
         </div>
       </div>
     </div>
@@ -358,17 +372,17 @@
 
   <section id="install">
     <div class="container">
-      <h2>四步安装</h2>
-      <p class="section-desc">目前需要用 Chrome 的开发者模式手动加载。</p>
+      <h2 data-en="Install in four steps">四步安装</h2>
+      <p class="section-desc" data-en="For now you load it manually via Chrome's developer mode.">目前需要用 Chrome 的开发者模式手动加载。</p>
 
       <div class="steps">
         <div class="step">
           <div class="num">1</div>
           <div class="body">
-            <h3>下载扩展</h3>
-            <p>
+            <h3 data-en="Download the extension">下载扩展</h3>
+            <p data-en='Click the <a href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles.zip">Download extension</a> button at the top — you&apos;ll get a .zip file. Unzip it somewhere you&apos;ll remember (like your Documents folder).'>
               点击顶部
-              <a href="https://github.com/huanshuowang/youtube-dual-subtitles/archive/refs/heads/main.zip">下载扩展</a>
+              <a href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles.zip">下载扩展</a>
               按钮，得到一个 .zip 文件。解压到你喜欢的位置（比如"文档"文件夹）。
             </p>
           </div>
@@ -376,8 +390,8 @@
         <div class="step">
           <div class="num">2</div>
           <div class="body">
-            <h3>打开 Chrome 扩展页面</h3>
-            <p>
+            <h3 data-en="Open Chrome's extensions page">打开 Chrome 扩展页面</h3>
+            <p data-en="Type <code>chrome://extensions</code> in the address bar and press enter. Turn on <strong>Developer mode</strong> in the top-right corner.">
               地址栏输入 <code>chrome://extensions</code> 回车，右上角打开 <strong>开发者模式</strong>（Developer mode）。
             </p>
           </div>
@@ -385,8 +399,8 @@
         <div class="step">
           <div class="num">3</div>
           <div class="body">
-            <h3>加载已解压的扩展</h3>
-            <p>
+            <h3 data-en="Load the unpacked extension">加载已解压的扩展</h3>
+            <p data-en="Click <strong>Load unpacked</strong> in the top-left and pick the <code>youtube-dual-subtitles-main</code> folder you just unzipped.">
               点左上角 <strong>加载已解压的扩展</strong>（Load unpacked），选择刚解压出来的
               <code>youtube-dual-subtitles-main</code> 文件夹。
             </p>
@@ -395,8 +409,8 @@
         <div class="step">
           <div class="num">4</div>
           <div class="body">
-            <h3>打开 YouTube 视频</h3>
-            <p>
+            <h3 data-en="Open a YouTube video">打开 YouTube 视频</h3>
+            <p data-en="First click the <kbd>CC</kbd> button in the bottom-right of the video to turn on native captions (in the language you want to learn). Then click the extension icon in the top-right of Chrome and pick your second language — it will overlay on top of the native caption.">
               先点视频右下角的 <kbd>CC</kbd> 按钮开原生字幕（你想学的那种语言），然后点浏览器右上角的扩展图标，
               选第二语言即可。中文字幕会自动叠加到英文字幕上方。
             </p>
@@ -408,28 +422,28 @@
 
   <section id="faq">
     <div class="container">
-      <h2>常见问题</h2>
+      <h2 data-en="FAQ">常见问题</h2>
       <p class="section-desc"></p>
 
       <details>
-        <summary>为什么必须打开 YouTube 原生 CC 字幕？</summary>
-        <p>因为扩展需要拦截 YouTube 播放器自己去拿字幕的请求。YouTube 只在你开 CC 的时候才发这个请求，我们才能拿到完整的字幕数据来翻译。</p>
+        <summary data-en="Why do I have to turn on YouTube's native CC?">为什么必须打开 YouTube 原生 CC 字幕？</summary>
+        <p data-en="Because the extension works by intercepting YouTube's own caption request. YouTube only fires that request when CC is on — that's how we get the full caption data to translate.">因为扩展需要拦截 YouTube 播放器自己去拿字幕的请求。YouTube 只在你开 CC 的时候才发这个请求，我们才能拿到完整的字幕数据来翻译。</p>
       </details>
       <details>
-        <summary>如果视频没有字幕怎么办？</summary>
-        <p>YouTube 上大部分视频有自动生成（ASR）字幕。真的一点都没有的视频，扩展没法凭空生成字幕，这种情况暂时无解。</p>
+        <summary data-en="What if the video has no captions?">如果视频没有字幕怎么办？</summary>
+        <p data-en="Most YouTube videos have auto-generated (ASR) captions. If a video really has none at all, the extension can't invent them out of thin air — no workaround for now.">YouTube 上大部分视频有自动生成（ASR）字幕。真的一点都没有的视频，扩展没法凭空生成字幕，这种情况暂时无解。</p>
       </details>
       <details>
-        <summary>翻译准确吗？</summary>
-        <p>用的是免费版 Google Translate，日常内容准确率不错。技术、法律、双关等专有内容会稍差。扩展本身会先合并被切断的句子再翻译，比很多同类扩展效果更好。</p>
+        <summary data-en="How accurate is the translation?">翻译准确吗？</summary>
+        <p data-en="It uses the free Google Translate endpoint — quality is solid for everyday content. Technical, legal, or wordplay-heavy material is weaker. The extension merges broken clauses before translating, so results are usually noticeably better than other extensions.">用的是免费版 Google Translate，日常内容准确率不错。技术、法律、双关等专有内容会稍差。扩展本身会先合并被切断的句子再翻译，比很多同类扩展效果更好。</p>
       </details>
       <details>
-        <summary>会上传我的数据吗？</summary>
-        <p>扩展代码完全开源可审。它只做三件事：读取当前视频的字幕（YouTube 自己已经在传的数据）、发到 Google Translate 免费端点、显示结果。不收集、不上传任何账户或行为数据。</p>
+        <summary data-en="Does it upload my data?">会上传我的数据吗？</summary>
+        <p data-en="The full source is open for audit. The extension does exactly three things: read the current video's caption (data YouTube already ships), send it to Google Translate's free endpoint, and display the result. No account or behavioral data is collected or uploaded.">扩展代码完全开源可审。它只做三件事：读取当前视频的字幕（YouTube 自己已经在传的数据）、发到 Google Translate 免费端点、显示结果。不收集、不上传任何账户或行为数据。</p>
       </details>
       <details>
-        <summary>遇到 bug 或想加功能怎么办？</summary>
-        <p>去 <a href="https://github.com/huanshuowang/youtube-dual-subtitles/issues" target="_blank" rel="noopener">GitHub Issues</a> 开一个新帖子告诉我，我会收到通知。</p>
+        <summary data-en="Found a bug or have a feature request?">遇到 bug 或想加功能怎么办？</summary>
+        <p data-en='Open a new post on <a href="https://github.com/huanshuowang/youtube-dual-subtitles/issues" target="_blank" rel="noopener">GitHub Issues</a> and I&apos;ll get notified.'>去 <a href="https://github.com/huanshuowang/youtube-dual-subtitles/issues" target="_blank" rel="noopener">GitHub Issues</a> 开一个新帖子告诉我，我会收到通知。</p>
       </details>
     </div>
   </section>
@@ -439,6 +453,51 @@
       <p>Made by Happy</p>
     </div>
   </footer>
+
+  <script>
+    (function () {
+      const STORAGE_KEY = "yds-site-lang";
+      const TITLES = {
+        zh: "YouTube Dual Subtitles — 让 YouTube 同时显示两种语言字幕",
+        en: "YouTube Dual Subtitles — See two languages on YouTube at once"
+      };
+      const DESCRIPTIONS = {
+        zh: "一个免费的 Chrome 扩展，让 YouTube 视频同时显示原生字幕 + 中文翻译（或任意第二语言）。",
+        en: "A free Chrome extension that shows YouTube's native caption plus a second-language translation at the same time."
+      };
+      const TOGGLE_LABEL = { zh: "EN", en: "中" };
+
+      const nodes = Array.from(document.querySelectorAll("[data-en]"));
+      // Snapshot original Chinese content so we can restore it after switching to EN.
+      nodes.forEach(n => { n.dataset.zh = n.innerHTML; });
+
+      const descMeta = document.querySelector('meta[name="description"]');
+      const toggleBtn = document.getElementById("langToggle");
+
+      function apply(lang) {
+        const key = lang === "en" ? "en" : "zh";
+        nodes.forEach(n => {
+          const html = key === "en" ? n.dataset.en : n.dataset.zh;
+          if (html != null) n.innerHTML = html;
+        });
+        document.documentElement.lang = key === "en" ? "en" : "zh-Hans";
+        document.title = TITLES[key];
+        if (descMeta) descMeta.setAttribute("content", DESCRIPTIONS[key]);
+        toggleBtn.textContent = TOGGLE_LABEL[key];
+        toggleBtn.setAttribute("aria-label", key === "en" ? "切换到中文" : "Switch to English");
+      }
+
+      let saved = null;
+      try { saved = localStorage.getItem(STORAGE_KEY); } catch {}
+      apply(saved === "en" ? "en" : "zh");
+
+      toggleBtn.addEventListener("click", () => {
+        const next = document.documentElement.lang.startsWith("zh") ? "en" : "zh";
+        try { localStorage.setItem(STORAGE_KEY, next); } catch {}
+        apply(next);
+      });
+    })();
+  </script>
 
 </body>
 </html>
