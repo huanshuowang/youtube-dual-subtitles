@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YouTube Dual Subtitles — 让 YouTube 同时显示两种语言字幕</title>
   <meta name="description" content="一个免费的 Chrome 扩展，让 YouTube 视频同时显示原生字幕 + 中文翻译（或任意第二语言）。" />
-  <link rel="icon" type="image/png" href="../icons/icon48.png" />
+  <link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140"><rect width="140" height="140" rx="30" fill="%23E53935"/><rect x="26" y="34" width="88" height="44" rx="10" fill="%23ffffff" opacity="0.85"/><text x="70" y="67" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="%23E53935">CC</text><rect x="20" y="92" width="100" height="16" rx="4" fill="%23ffffff"/></svg>' />
 
   <style>
     :root {
@@ -47,6 +47,7 @@
     .logo-mark {
       width: 28px; height: 28px;
       display: block;
+      flex: 0 0 28px;
     }
     nav a.gh { color: var(--text-dim); font-size: 14px; }
     .lang-toggle {
@@ -293,7 +294,12 @@
   <nav>
     <div class="container">
       <div class="logo">
-        <img class="logo-mark" src="../icons/icon128.png" alt="" />
+        <svg class="logo-mark" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="140" height="140" rx="30" fill="#E53935"/>
+          <rect x="26" y="34" width="88" height="44" rx="10" fill="#ffffff" opacity="0.85"/>
+          <text x="70" y="67" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#E53935">CC</text>
+          <rect x="20" y="92" width="100" height="16" rx="4" fill="#ffffff"/>
+        </svg>
         <span>YouTube Dual Subtitles</span>
       </div>
       <div class="nav-right">
