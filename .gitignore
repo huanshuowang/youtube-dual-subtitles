@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node (in case anyone adds tooling)
+node_modules/
+npm-debug.log*
+.env
+.env.local
+
+# Build artifacts
+*.zip
+*.crx
+dist/

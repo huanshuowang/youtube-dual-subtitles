@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube Dual Subtitles — 让 YouTube 同时显示两种语言字幕</title>
+  <meta name="description" content="一个免费的 Chrome 扩展，让 YouTube 视频同时显示原生字幕 + 中文翻译（或任意第二语言）。" />
+  <link rel="icon" type="image/png" href="../icons/icon48.png" />
+
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --bg-elev: #1a1a1a;
+      --card: #202020;
+      --text: #f5f5f5;
+      --text-dim: #a3a3a3;
+      --brand: #ff0033;
+      --brand-2: #ff4d6d;
+      --border: rgba(255,255,255,0.08);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--brand-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    nav {
+      padding: 20px 0;
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 0;
+      background: rgba(15,15,15,0.85);
+      z-index: 10;
+    }
+    nav .container { display: flex; align-items: center; justify-content: space-between; }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
+    .logo-mark {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: var(--brand);
+      display: inline-flex; align-items: center; justify-content: center;
+      color: white; font-weight: 800; font-size: 13px;
+    }
+    nav a.gh { color: var(--text-dim); font-size: 14px; }
+
+    /* Hero */
+    .hero { padding: 80px 0 60px; text-align: center; }
+    .hero h1 {
+      font-size: 52px;
+      line-height: 1.1;
+      margin: 0 0 20px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #fff 0%, #bbb 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p.sub {
+      font-size: 20px;
+      color: var(--text-dim);
+      max-width: 620px;
+      margin: 0 auto 36px;
+    }
+    .cta {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--brand);
+      color: white;
+      padding: 14px 28px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 16px;
+      transition: transform .15s, box-shadow .15s;
+      box-shadow: 0 8px 20px rgba(255,0,51,0.3);
+    }
+    .cta:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(255,0,51,0.4); text-decoration: none; }
+    .cta-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--text);
+      padding: 14px 28px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 16px;
+      margin-left: 12px;
+      border: 1px solid var(--border);
+    }
+    .cta-secondary:hover { background: var(--bg-elev); text-decoration: none; }
+
+    /* Preview mockup */
+    .preview {
+      margin: 60px auto 0;
+      max-width: 780px;
+      background: linear-gradient(180deg, #000 0%, #111 100%);
+      border-radius: 12px;
+      padding: 36px 24px;
+      border: 1px solid var(--border);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .preview::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at center top, rgba(255,0,51,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse at center bottom, rgba(80,80,255,0.06) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .preview-caption-cn {
+      display: inline-block;
+      background: rgba(0,0,0,0.7);
+      padding: 6px 14px;
+      border-radius: 4px;
+      color: white;
+      font-weight: 600;
+      font-size: 18px;
+      margin-bottom: 12px;
+      position: relative;
+    }
+    .preview-caption-en {
+      display: inline-block;
+      background: rgba(0,0,0,0.7);
+      padding: 6px 14px;
+      border-radius: 4px;
+      color: white;
+      font-weight: 600;
+      font-size: 20px;
+      position: relative;
+    }
+    .preview-note {
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 13px;
+      margin: 14px 0 0;
+    }
+
+    /* Features */
+    section { padding: 60px 0; border-top: 1px solid var(--border); }
+    section h2 {
+      font-size: 32px;
+      margin: 0 0 12px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+    section p.section-desc {
+      color: var(--text-dim);
+      font-size: 17px;
+      margin: 0 0 40px;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
+    .feature {
+      background: var(--card);
+      padding: 24px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    .feature .icon {
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    .feature h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .feature p {
+      margin: 0;
+      color: var(--text-dim);
+      font-size: 14.5px;
+    }
+
+    /* Steps */
+    .steps { counter-reset: step; }
+    .step {
+      display: flex;
+      gap: 20px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step .num {
+      flex: 0 0 40px;
+      height: 40px;
+      background: var(--brand);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 16px;
+    }
+    .step .body h3 {
+      margin: 0 0 6px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .step .body p {
+      margin: 0;
+      color: var(--text-dim);
+      font-size: 15px;
+    }
+    code, kbd {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      background: var(--bg-elev);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+    }
+    kbd {
+      font-size: 12px;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.1);
+    }
+
+    /* FAQ */
+    details {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 10px;
+    }
+    details summary {
+      cursor: pointer;
+      font-weight: 600;
+      list-style: none;
+    }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::after {
+      content: "+";
+      float: right;
+      color: var(--text-dim);
+      font-weight: 400;
+      font-size: 20px;
+      line-height: 1;
+    }
+    details[open] summary::after { content: "−"; }
+    details p {
+      margin: 12px 0 0;
+      color: var(--text-dim);
+      font-size: 15px;
+    }
+
+    /* Footer */
+    footer {
+      padding: 40px 0 60px;
+      color: var(--text-dim);
+      text-align: center;
+      font-size: 14px;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--text-dim); }
+
+    @media (max-width: 640px) {
+      .hero { padding: 50px 0 40px; }
+      .hero h1 { font-size: 36px; }
+      .hero p.sub { font-size: 17px; }
+      .cta-secondary { margin-left: 0; margin-top: 10px; }
+      section { padding: 40px 0; }
+      section h2 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="container">
+      <div class="logo">
+        <span class="logo-mark">双</span>
+        <span>YouTube Dual Subtitles</span>
+      </div>
+      <a class="gh" href="https://github.com/huanshuowang/youtube-dual-subtitles" target="_blank" rel="noopener">
+        View on GitHub →
+      </a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="container">
+      <h1>YouTube 也能双语字幕</h1>
+      <p class="sub">
+        免费的 Chrome 扩展，在 YouTube 视频里同时显示原生字幕 + 任意第二语言翻译。
+        看外语视频学语言、追国外内容不再切来切去。
+      </p>
+      <a class="cta" href="https://github.com/huanshuowang/youtube-dual-subtitles/archive/refs/heads/main.zip">
+        下载扩展 ⬇
+      </a>
+      <a class="cta-secondary" href="#install">如何安装</a>
+
+      <div class="preview">
+        <div>
+          <div class="preview-caption-cn">生存还是毁灭，这是一个问题</div>
+        </div>
+        <div>
+          <div class="preview-caption-en">To be, or not to be, that is the question</div>
+        </div>
+      </div>
+      <p class="preview-note">
+        ↑ 扩展叠加的第二语言翻译 · ↓ YouTube 原生字幕
+      </p>
+    </div>
+  </header>
+
+  <section id="features">
+    <div class="container">
+      <h2>为什么用它</h2>
+      <p class="section-desc">主流 YouTube 双语扩展的痛点，这里全解决了。</p>
+      <div class="features">
+        <div class="feature">
+          <div class="icon">⚡</div>
+          <h3>零延迟同步</h3>
+          <p>截获 YouTube 播放器自己的字幕请求，整片提前翻译，跟视频时间轴精确对齐，不再"中文永远慢半拍"。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🎯</div>
+          <h3>整句翻译</h3>
+          <p>合并 ASR 把一句话切成两半的碎片再翻译，得到完整语境下的准确译文，翻译质量比同类扩展更好。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🖱️</div>
+          <h3>悬停拖动字幕位置</h3>
+          <p>鼠标碰到字幕就浮出拖拽把手，按住上下拖，全屏也能调，不用来回开设置面板。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🌍</div>
+          <h3>100+ 种语言</h3>
+          <p>支持 Google Translate 全部目标语言，中文简繁、日文、韩文、西语、法语等都能选，一键切换。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🔐</div>
+          <h3>无需登录 · 无 API Key</h3>
+          <p>用免费的 Google Translate 端点，装完就能用。不上传数据，代码全开源。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🎨</div>
+          <h3>样式可调</h3>
+          <p>字号、颜色、背景透明度、垂直位置随你调，还能实时预览。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="container">
+      <h2>四步安装</h2>
+      <p class="section-desc">目前需要用 Chrome 的开发者模式手动加载。</p>
+
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <div class="body">
+            <h3>下载扩展</h3>
+            <p>
+              点击顶部
+              <a href="https://github.com/huanshuowang/youtube-dual-subtitles/archive/refs/heads/main.zip">下载扩展</a>
+              按钮，得到一个 .zip 文件。解压到你喜欢的位置（比如"文档"文件夹）。
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div class="body">
+            <h3>打开 Chrome 扩展页面</h3>
+            <p>
+              地址栏输入 <code>chrome://extensions</code> 回车，右上角打开 <strong>开发者模式</strong>（Developer mode）。
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div class="body">
+            <h3>加载已解压的扩展</h3>
+            <p>
+              点左上角 <strong>加载已解压的扩展</strong>（Load unpacked），选择刚解压出来的
+              <code>youtube-dual-subtitles-main</code> 文件夹。
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div class="body">
+            <h3>打开 YouTube 视频</h3>
+            <p>
+              先点视频右下角的 <kbd>CC</kbd> 按钮开原生字幕（你想学的那种语言），然后点浏览器右上角的扩展图标，
+              选第二语言即可。中文字幕会自动叠加到英文字幕上方。
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="container">
+      <h2>常见问题</h2>
+      <p class="section-desc"></p>
+
+      <details>
+        <summary>为什么必须打开 YouTube 原生 CC 字幕？</summary>
+        <p>因为扩展需要拦截 YouTube 播放器自己去拿字幕的请求。YouTube 只在你开 CC 的时候才发这个请求，我们才能拿到完整的字幕数据来翻译。</p>
+      </details>
+      <details>
+        <summary>如果视频没有字幕怎么办？</summary>
+        <p>YouTube 上大部分视频有自动生成（ASR）字幕。真的一点都没有的视频，扩展没法凭空生成字幕，这种情况暂时无解。</p>
+      </details>
+      <details>
+        <summary>翻译准确吗？</summary>
+        <p>用的是免费版 Google Translate，日常内容准确率不错。技术、法律、双关等专有内容会稍差。扩展本身会先合并被切断的句子再翻译，比很多同类扩展效果更好。</p>
+      </details>
+      <details>
+        <summary>会上传我的数据吗？</summary>
+        <p>扩展代码完全开源可审。它只做三件事：读取当前视频的字幕（YouTube 自己已经在传的数据）、发到 Google Translate 免费端点、显示结果。不收集、不上传任何账户或行为数据。</p>
+      </details>
+      <details>
+        <summary>遇到 bug 或想加功能怎么办？</summary>
+        <p>去 <a href="https://github.com/huanshuowang/youtube-dual-subtitles/issues" target="_blank" rel="noopener">GitHub Issues</a> 开一个新帖子告诉我，我会收到通知。</p>
+      </details>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>Made by Happy</p>
+    </div>
+  </footer>
+
+</body>
+</html>

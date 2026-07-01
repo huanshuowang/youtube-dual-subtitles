@@ -1,0 +1,50 @@
+.yds-overlay {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 96%;
+  padding: 4px 12px;
+  border-radius: 4px;
+  text-align: center;
+  line-height: 1.3;
+  font-family: "YouTube Sans", "Roboto", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+  z-index: 999999 !important;
+  white-space: pre-wrap;
+}
+
+/* The drag handle sits just above the overlay and only becomes visible
+   when the mouse is near the overlay, or during an active drag. */
+.yds-drag-handle {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #202020;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  cursor: ns-resize;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  user-select: none;
+  pointer-events: auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  font-weight: 700;
+}
+
+.yds-drag-handle.yds-drag-visible,
+.yds-overlay.yds-dragging .yds-drag-handle {
+  opacity: 1;
+}
+
+.yds-overlay.yds-dragging {
+  outline: 2px dashed rgba(255, 255, 255, 0.7);
+  outline-offset: 2px;
+}
