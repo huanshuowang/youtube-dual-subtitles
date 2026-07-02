@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YouTube Dual Subtitles — 让 YouTube 同时显示两种语言字幕</title>
-  <meta name="description" content="一个免费的 Chrome 扩展，让 YouTube 视频同时显示原生字幕 + 中文翻译（或任意第二语言）。" />
-  <link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140"><rect width="140" height="140" rx="30" fill="%23E53935"/><rect x="26" y="34" width="88" height="44" rx="10" fill="%23ffffff" opacity="0.85"/><text x="70" y="67" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="%23E53935">CC</text><rect x="20" y="92" width="100" height="16" rx="4" fill="%23ffffff"/></svg>' />
+  <title>YouTube Dual Subtitles 1.2.0 — 让 YouTube 同时显示两种语言字幕</title>
+  <meta name="description" content="在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。" />
+  <link rel="icon" type="image/png" href="../icons/icon48.png" />
 
   <style>
     :root {
@@ -47,7 +47,6 @@
     .logo-mark {
       width: 28px; height: 28px;
       display: block;
-      flex: 0 0 28px;
     }
     nav a.gh { color: var(--text-dim); font-size: 14px; }
     .lang-toggle {
@@ -106,6 +105,17 @@
       border: 1px solid var(--border);
     }
     .cta-secondary:hover { background: var(--bg-elev); text-decoration: none; }
+    .version-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
 
     /* Preview mockup */
     .preview {
@@ -294,12 +304,7 @@
   <nav>
     <div class="container">
       <div class="logo">
-        <svg class="logo-mark" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <rect width="140" height="140" rx="30" fill="#E53935"/>
-          <rect x="26" y="34" width="88" height="44" rx="10" fill="#ffffff" opacity="0.85"/>
-          <text x="70" y="67" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#E53935">CC</text>
-          <rect x="20" y="92" width="100" height="16" rx="4" fill="#ffffff"/>
-        </svg>
+        <img class="logo-mark" src="../icons/icon128.png" alt="" />
         <span>YouTube Dual Subtitles</span>
       </div>
       <div class="nav-right">
@@ -314,11 +319,11 @@
   <header class="hero">
     <div class="container">
       <h1 data-en="Dual subtitles for YouTube">YouTube 也能双语字幕</h1>
-      <p class="sub" data-en="A free Chrome extension that overlays a second-language translation on top of YouTube's own captions. Watch foreign videos and learn languages without switching back and forth.">
-        免费的 Chrome 扩展，在 YouTube 视频里同时显示原生字幕 + 任意第二语言翻译。
-        看外语视频学语言、追国外内容不再切来切去。
+      <div class="version-pill">v1.2.0</div>
+      <p class="sub" data-en="Show two subtitle languages on YouTube. Use native captions or free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek translation.">
+        在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。
       </p>
-      <a class="cta" href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles.zip" data-en="Download extension ⬇">
+      <a class="cta" href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles-1.2.0.zip" data-en="Download extension ⬇">
         下载扩展 ⬇
       </a>
       <a class="cta-secondary" href="#install" data-en="How to install">如何安装</a>
@@ -364,8 +369,8 @@
         </div>
         <div class="feature">
           <div class="icon">🔐</div>
-          <h3 data-en="No login · No API key">无需登录 · 无 API Key</h3>
-          <p data-en="Uses the free Google Translate endpoint — works the moment you install it. No data is uploaded, and the source is fully open.">用免费的 Google Translate 端点，装完就能用。不上传数据，代码全开源。</p>
+          <h3 data-en="Free forever · optional AI upgrade">完全免费 · 可选 AI 增强</h3>
+          <p data-en="Use native captions or free Google Translate. When you need higher accuracy, optionally enhance translations with Claude, OpenAI, Gemini or DeepSeek — APIs are called only after you confirm.">使用视频自带字幕或 Google 免费翻译。需要更高精度时，可选 Claude / OpenAI / Gemini / DeepSeek 增强翻译，并且只会在你确认后调用 API。</p>
         </div>
         <div class="feature">
           <div class="icon">🎨</div>
@@ -386,9 +391,9 @@
           <div class="num">1</div>
           <div class="body">
             <h3 data-en="Download the extension">下载扩展</h3>
-            <p data-en='Click the <a href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles.zip">Download extension</a> button at the top — you&apos;ll get a .zip file. Unzip it somewhere you&apos;ll remember (like your Documents folder).'>
+            <p data-en='Click the <a href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles-1.2.0.zip">Download extension</a> button at the top — you&apos;ll get a .zip file. Unzip it somewhere you&apos;ll remember (like your Documents folder).'>
               点击顶部
-              <a href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles.zip">下载扩展</a>
+              <a href="https://github.com/huanshuowang/youtube-dual-subtitles/releases/latest/download/youtube-dual-subtitles-1.2.0.zip">下载扩展</a>
               按钮，得到一个 .zip 文件。解压到你喜欢的位置（比如"文档"文件夹）。
             </p>
           </div>
@@ -426,6 +431,30 @@
     </div>
   </section>
 
+  <section id="changelog">
+    <div class="container">
+      <h2 data-en="What's new in 1.2.0">1.2.0 更新日志</h2>
+      <p class="section-desc" data-en="Higher-quality translation options with safer API controls.">新增高质量翻译源，同时避免不必要的 API 花费。</p>
+      <div class="features">
+        <div class="feature">
+          <div class="icon">🤖</div>
+          <h3 data-en="Optional AI translation">可选AI翻译</h3>
+          <p data-en="Optional paid translation providers are now supported, alongside native captions and free Google Translate.">在视频自带字幕和 Google 免费翻译之外，新增 Claude / OpenAI / Gemini / DeepSeek 可选翻译源。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🛡️</div>
+          <h3 data-en="Manual API confirmation">付费 API 手动确认</h3>
+          <p data-en="Paid APIs are never called automatically by default. Use the popup button to enable the selected API for the current video, or turn on per-video prompts.">默认不会自动调用付费 API。需要在插件弹窗里点击“本视频使用所选 API 翻译”，也可以开启每个视频自动询问。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">✅</div>
+          <h3 data-en="Clear provider status">翻译源状态可视化</h3>
+          <p data-en="The popup now shows whether subtitles are native, Google-translated, or produced by a selected API, including live translation progress.">弹窗会显示当前字幕来自自带字幕、Google 免费翻译还是所选 API，并显示实时翻译进度。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="faq">
     <div class="container">
       <h2 data-en="FAQ">常见问题</h2>
@@ -441,11 +470,11 @@
       </details>
       <details>
         <summary data-en="How accurate is the translation?">翻译准确吗？</summary>
-        <p data-en="It uses the free Google Translate endpoint — quality is solid for everyday content. Technical, legal, or wordplay-heavy material is weaker. The extension merges broken clauses before translating, so results are usually noticeably better than other extensions.">用的是免费版 Google Translate，日常内容准确率不错。技术、法律、双关等专有内容会稍差。扩展本身会先合并被切断的句子再翻译，比很多同类扩展效果更好。</p>
+        <p data-en="By default it uses native captions or free Google Translate. If you need higher quality, you can manually enable Claude, OpenAI, Gemini or DeepSeek for the current video.">默认优先使用视频自带字幕或 Google 免费翻译。如果你需要更高质量，可以手动为当前视频启用 Claude / OpenAI / Gemini / DeepSeek。</p>
       </details>
       <details>
         <summary data-en="Does it upload my data?">会上传我的数据吗？</summary>
-        <p data-en="The full source is open for audit. The extension does exactly three things: read the current video's caption (data YouTube already ships), send it to Google Translate's free endpoint, and display the result. No account or behavioral data is collected or uploaded.">扩展代码完全开源可审。它只做三件事：读取当前视频的字幕（YouTube 自己已经在传的数据）、发到 Google Translate 免费端点、显示结果。不收集、不上传任何账户或行为数据。</p>
+        <p data-en="The source is open for audit. The extension reads the current video's captions and sends caption text only to the translation provider you choose. Paid APIs are called only after explicit confirmation.">扩展代码完全开源可审。它只读取当前视频字幕，并只把字幕文本发送到你选择的翻译源。付费 API 只有在明确确认后才会调用。</p>
       </details>
       <details>
         <summary data-en="Found a bug or have a feature request?">遇到 bug 或想加功能怎么办？</summary>
@@ -464,12 +493,12 @@
     (function () {
       const STORAGE_KEY = "yds-site-lang";
       const TITLES = {
-        zh: "YouTube Dual Subtitles — 让 YouTube 同时显示两种语言字幕",
-        en: "YouTube Dual Subtitles — See two languages on YouTube at once"
+        zh: "YouTube Dual Subtitles 1.2.0 — 让 YouTube 同时显示两种语言字幕",
+        en: "YouTube Dual Subtitles 1.2.0 — See two languages on YouTube at once"
       };
       const DESCRIPTIONS = {
-        zh: "一个免费的 Chrome 扩展，让 YouTube 视频同时显示原生字幕 + 中文翻译（或任意第二语言）。",
-        en: "A free Chrome extension that shows YouTube's native caption plus a second-language translation at the same time."
+        zh: "在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。",
+        en: "Show two subtitle languages on YouTube. Use native captions or free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek translation."
       };
       const TOGGLE_LABEL = { zh: "EN", en: "中" };
 

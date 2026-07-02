@@ -23,7 +23,12 @@
       bottomOffset: 22,     // % from the bottom of the video
       fontSize: 22,
       color: "#ffffff",
-      background: "rgba(0,0,0,0.6)"
+      background: "rgba(0,0,0,0.6)",
+      // Translation provider: "google" | "claude" | "openai" | "gemini" | "deepseek".
+      // Google is free/anonymous; the others need the user's own API key.
+      translationProvider: "google",
+      paidApiAskEachVideo: false,
+      apiKeys: {}           // { claude?: string, openai?: string, gemini?: string, deepseek?: string }
     }
   };
 
@@ -32,10 +37,49 @@
   const translationCache = new Map();
   let cacheKeyLang = "";
 
-  // Pre-translated cues (intercepted path).
-  let preCues = [];             // [{start, end, text}] — translated
+  // Cues we render from. Two independent sources with priority:
+  //   preCuesNative — pulled from a native second-language track (highest quality)
+  //   preCuesTranslated — Google-translated from the source track (fallback)
+  // Render always prefers native if it has any cues.
+  let preCuesNative = [];
+  let preCuesTranslated = [];
   let sourceCuesCache = null;   // raw source cues, kept for re-translation on lang change
   const seenTrackKeys = new Set(); // dedupe timedtext responses by cue-count+first-start
+  let translationStatus = {
+    mode: "idle",
+    provider: "",
+    requestedProvider: "",
+    cueCount: 0,
+    totalCount: 0,
+    translatedCount: 0,
+    error: "",
+    updatedAt: Date.now()
+  };
+
+  function setTranslationStatus(next) {
+    translationStatus = { ...translationStatus, ...next, updatedAt: Date.now() };
+    log("translation status:", translationStatus);
+  }
+  const paidApiDecisions = new Map(); // key -> "approved" | "declined"
+  let paidApiPromptEl = null;
+
+  // Track list from ytInitialPlayerResponse (published by inject.js).
+  let availableTracks = [];       // [{languageCode, kind, name}]
+  let nativeTargetRequested = false; // don't ask the player to swap tracks more than once per video
+
+  // Aborts any in-flight LLM/Google Translate calls when we get a better
+  // source of cues (native track), a video change, or a settings change.
+  // Prevents burning API tokens on translations we're about to discard.
+  let translateAbortController = null;
+  let translateGeneration = 0;
+  function abortInflightTranslation(reason) {
+    translateGeneration++;
+    if (translateAbortController) {
+      log(`abort in-flight translation: ${reason}`);
+      translateAbortController.abort();
+      translateAbortController = null;
+    }
+  }
 
   // Fallback path state.
   let lastNativeText = "";
@@ -67,20 +111,245 @@
     const prev = { ...STATE.settings };
     Object.assign(STATE.settings, changes.ydsSettings.newValue || {});
     applyOverlayStyles();
-    if (prev.secondLang !== STATE.settings.secondLang) {
+
+    const langChanged = prev.secondLang !== STATE.settings.secondLang;
+    const providerChanged = prev.translationProvider !== STATE.settings.translationProvider;
+    const keysChanged = JSON.stringify(prev.apiKeys || {}) !== JSON.stringify(STATE.settings.apiKeys || {});
+
+    if (langChanged) {
+      abortInflightTranslation("target language changed");
+      closePaidApiPrompt();
+      setTranslationStatus({
+        mode: "idle",
+        provider: "",
+        requestedProvider: "",
+        cueCount: 0,
+        error: ""
+      });
+      // Full reset — new target language means different native track possible.
       translationCache.clear();
       cacheKeyLang = STATE.settings.secondLang;
-      preCues = [];
+      preCuesNative = [];
+      preCuesTranslated = [];
+      nativeTargetRequested = false;
       currentRenderedText = "";
       lastNativeText = "";
-      // Re-translate previously intercepted source cues with the new language.
-      if (sourceCuesCache && STATE.settings.secondLang) {
-        const tl = toGoogleLang(STATE.settings.secondLang);
-        translateCuesProgressive(sourceCuesCache, tl, (partial) => { preCues = partial; });
-      }
+      maybeRequestNativeTrack();
     }
+
+    // Any change to translation config: retranslate from cached source if we
+    // aren't already showing a higher-priority native track.
+    if ((langChanged || providerChanged || keysChanged)
+        && sourceCuesCache
+        && STATE.settings.secondLang
+        && !preCuesNative.length) {
+      preCuesTranslated = [];
+      const tl = toGoogleLang(STATE.settings.secondLang);
+      startCuesTranslation(sourceCuesCache, tl, chooseSourceTranslationProvider(), "settings changed");
+      maybeAskForPaidApi(sourceCuesCache, tl, "settings changed");
+    }
+
     if (!STATE.settings.enabled) renderOverlay("");
   });
+
+  // ---------- track list handler ----------
+  window.addEventListener("YDS_TRACK_LIST", (e) => {
+    const detail = e.detail || {};
+    availableTracks = detail.tracks || [];
+    log("track list:", availableTracks.map(t => `${t.languageCode}${t.kind === "asr" ? "(asr)" : ""}`).join(", ") || "(none)");
+    maybeRequestNativeTrack();
+
+    const provider = chooseSourceTranslationProvider();
+    if (provider !== "google" && sourceCuesCache && !preCuesNative.length) {
+      preCuesTranslated = [];
+      startCuesTranslation(sourceCuesCache, toGoogleLang(STATE.settings.secondLang), provider, "native unavailable after track list");
+    } else if (sourceCuesCache && !preCuesNative.length) {
+      maybeAskForPaidApi(sourceCuesCache, toGoogleLang(STATE.settings.secondLang), "native unavailable after track list");
+    }
+  });
+
+  function isCcOn() {
+    // Returns true / false / null (player not ready yet).
+    const btn = document.querySelector(".ytp-subtitles-button");
+    if (!btn) return null;
+    return btn.getAttribute("aria-pressed") === "true";
+  }
+
+  function maybeRequestNativeTrack() {
+    if (nativeTargetRequested) return;
+    if (!STATE.settings.enabled || !STATE.settings.secondLang) return;
+    if (!availableTracks.length) return;
+    // Don't do the swap dance while the user has CC off — it would briefly
+    // flash captions on/off. Wait until the user turns CC on themselves;
+    // we'll retry from the intercept handler when that happens.
+    const cc = isCcOn();
+    if (cc !== true) {
+      log(`CC is ${cc === false ? "off" : "unknown"}, deferring native track swap`);
+      return;
+    }
+    const match = getNativeTargetTrack();
+    if (!match) {
+      log(`no native track for ${STATE.settings.secondLang}, will translate`);
+      return;
+    }
+    nativeTargetRequested = true;
+    log(`requesting native track: ${match.languageCode} (${match.name})`);
+    window.dispatchEvent(new CustomEvent("YDS_LOAD_NATIVE_TRACK", {
+      detail: { languageCode: match.languageCode }
+    }));
+  }
+
+  function langMatches(target, candidate) {
+    if (!target || !candidate) return false;
+    const t = String(target).toLowerCase();
+    const c = String(candidate).toLowerCase();
+    if (t === c) return true;
+    // Chinese script variants: don't cross-match Simplified vs Traditional.
+    const simplified = new Set(["zh", "zh-hans", "zh-cn", "zh-sg"]);
+    const traditional = new Set(["zh-hant", "zh-tw", "zh-hk", "zh-mo"]);
+    if (t.startsWith("zh") || c.startsWith("zh")) {
+      if (simplified.has(t) && simplified.has(c)) return true;
+      if (traditional.has(t) && traditional.has(c)) return true;
+      return false;
+    }
+    // Other languages: coarse match on base language code.
+    return t.split("-")[0] === c.split("-")[0];
+  }
+
+  function getNativeTargetTrack() {
+    if (!STATE.settings.secondLang) return null;
+    return availableTracks.find(t => t.kind !== "asr" && langMatches(STATE.settings.secondLang, t.languageCode)) || null;
+  }
+
+  function selectedTranslationProvider() {
+    return STATE.settings.translationProvider || "google";
+  }
+
+  function providerDisplayName(provider) {
+    const names = {
+      claude: "Claude",
+      openai: "OpenAI",
+      gemini: "Gemini",
+      deepseek: "DeepSeek"
+    };
+    return names[provider] || provider || "API";
+  }
+
+  function paidDecisionKey(provider) {
+    return [STATE.videoId || "", STATE.settings.secondLang || "", provider || ""].join("|");
+  }
+
+  function isPaidProvider(provider) {
+    return provider && provider !== "google";
+  }
+
+  function chooseSourceTranslationProvider() {
+    const provider = selectedTranslationProvider();
+    if (provider === "google") return "google";
+
+    // Paid providers are only allowed after the YouTube track list proves that
+    // no native target-language track exists. Until then, use free Google as
+    // a disposable warm cache while the native-track request races.
+    if (!availableTracks.length || getNativeTargetTrack()) return "google";
+    return paidApiDecisions.get(paidDecisionKey(provider)) === "approved" ? provider : "google";
+  }
+
+  function maybeAskForPaidApi(cues, tl, reason) {
+    const provider = selectedTranslationProvider();
+    if (!isPaidProvider(provider)) return;
+    if (!availableTracks.length || getNativeTargetTrack() || preCuesNative.length) return;
+
+    const key = paidDecisionKey(provider);
+    const decision = paidApiDecisions.get(key);
+    if (decision === "approved") {
+      if (translationStatus.provider !== provider || translationStatus.mode !== "translating") {
+        startCuesTranslation(cues, tl, provider, `${reason} (user approved paid API)`);
+      }
+      return;
+    }
+    if (decision === "declined" || paidApiPromptEl) return;
+
+    const apiKey = (STATE.settings.apiKeys || {})[provider];
+    if (!apiKey) {
+      setTranslationStatus({
+        mode: "need_api_key",
+        provider: "google",
+        requestedProvider: provider,
+        cueCount: preCuesTranslated.length,
+        totalCount: cues.length,
+        translatedCount: preCuesTranslated.length,
+        error: `${providerDisplayName(provider)} API key not set`
+      });
+      return;
+    }
+
+    setTranslationStatus({
+      mode: "awaiting_paid_confirmation",
+      provider: "google",
+      requestedProvider: provider,
+      cueCount: preCuesTranslated.length,
+      totalCount: cues.length,
+      translatedCount: preCuesTranslated.length,
+      error: ""
+    });
+    if (!STATE.settings.paidApiAskEachVideo) return;
+    showPaidApiPrompt(provider, () => {
+      closePaidApiPrompt();
+      approvePaidApiForCurrentVideo(reason);
+    }, () => {
+      paidApiDecisions.set(key, "declined");
+      closePaidApiPrompt();
+      setTranslationStatus({
+        mode: "fallback",
+        provider: "google",
+        requestedProvider: provider,
+        cueCount: preCuesTranslated.length,
+        totalCount: cues.length,
+        translatedCount: preCuesTranslated.length,
+        error: "用户取消了付费 API，本视频使用免费 Google Translate"
+      });
+    });
+  }
+
+  function closePaidApiPrompt() {
+    if (paidApiPromptEl) paidApiPromptEl.remove();
+    paidApiPromptEl = null;
+  }
+
+  function showPaidApiPrompt(provider, onApprove, onDecline) {
+    closePaidApiPrompt();
+    const name = providerDisplayName(provider);
+    const root = document.createElement("div");
+    root.className = "yds-paid-api-confirm";
+    root.innerHTML = `
+      <div class="yds-paid-api-card">
+        <div class="yds-paid-api-title">是否为本视频使用 ${name} API？</div>
+        <div class="yds-paid-api-body">这会调用你的 ${name} Key，可能产生费用。取消后本视频会继续使用免费的 Google Translate。</div>
+        <div class="yds-paid-api-actions">
+          <button type="button" class="yds-paid-api-free">用免费 Google</button>
+          <button type="button" class="yds-paid-api-use">使用 ${name} API</button>
+        </div>
+      </div>`;
+    root.querySelector(".yds-paid-api-use").addEventListener("click", onApprove);
+    root.querySelector(".yds-paid-api-free").addEventListener("click", onDecline);
+    document.documentElement.appendChild(root);
+    paidApiPromptEl = root;
+  }
+
+  function approvePaidApiForCurrentVideo(reason = "popup approval") {
+    const provider = selectedTranslationProvider();
+    if (!isPaidProvider(provider)) return { ok: false, error: "当前翻译源不是付费 API" };
+    if (!sourceCuesCache || preCuesNative.length) return { ok: false, error: "当前视频没有可翻译的源字幕，或已经使用 native 字幕" };
+    const apiKey = (STATE.settings.apiKeys || {})[provider];
+    if (!apiKey) return { ok: false, error: `${providerDisplayName(provider)} API key not set` };
+
+    const key = paidDecisionKey(provider);
+    paidApiDecisions.set(key, "approved");
+    closePaidApiPrompt();
+    preCuesTranslated = [];
+    startCuesTranslation(sourceCuesCache, toGoogleLang(STATE.settings.secondLang), provider, `${reason} (user approved paid API)`);
+    return { ok: true, provider };
+  }
 
   // ---------- intercept handler ----------
   window.addEventListener("YDS_TIMEDTEXT", async (e) => {
@@ -89,17 +358,15 @@
     const url = detail.url || "";
     const text = detail.text || "";
 
-    // Skip YouTube's own translated tracks; we want the source-language track
-    // so we can control translation quality via Google Translate.
+    // Skip YouTube's own auto-translated tracks; we prefer either a real
+    // native track OR our own Google Translate output.
     if (/[?&]tlang=/.test(url)) {
       log("intercept: skipping tlang track");
       return;
     }
 
     // YouTube prefetches captions for autoplay/recommended/hover-preview videos.
-    // Only accept the track whose v= matches the video the user is watching,
-    // otherwise a later prefetch will overwrite preCues and blank the overlay.
-    // Read location.search fresh — during SPA nav, STATE.videoId may lag the URL.
+    // Only accept the track whose v= matches the video the user is watching.
     const vMatch = /[?&]v=([^&]+)/.exec(url);
     const trackVideoId = vMatch ? vMatch[1] : null;
     const pageVideoIdMatch = /[?&]v=([^&]+)/.exec(location.search);
@@ -109,25 +376,57 @@
       return;
     }
 
+    // Extract this track's language + kind from the URL.
+    const langMatch = /[?&]lang=([^&]+)/.exec(url);
+    const trackLang = langMatch ? decodeURIComponent(langMatch[1]) : "";
+    const isAsr = /[?&]kind=asr/.test(url);
+    const isNativeTarget = !isAsr && trackLang && langMatches(STATE.settings.secondLang, trackLang);
+
     const rawCues = parseCaptions(text);
     if (!rawCues.length) return;
-    // Merge cues that YouTube split mid-sentence so Google Translate sees
-    // the full clause and produces coherent output.
-    const sourceCues = mergeSplitCues(rawCues);
 
-    const key = `${sourceCues.length}|${sourceCues[0].start.toFixed(3)}|${sourceCues[sourceCues.length-1].end.toFixed(3)}`;
+    // Dedupe: same track can be fetched multiple times (e.g., after our swap dance).
+    const key = `${trackLang}|${isAsr ? "asr" : "sub"}|${rawCues.length}|${rawCues[0].start.toFixed(3)}|${rawCues[rawCues.length-1].end.toFixed(3)}`;
     if (seenTrackKeys.has(key)) return;
     seenTrackKeys.add(key);
+
+    if (isNativeTarget) {
+      // Native second-language track — use directly, no merge / no translate.
+      abortInflightTranslation(`native ${trackLang} loaded`);
+      preCuesNative = rawCues.map(c => ({ start: c.start, end: c.end, text: stripUnwantedPunctuation(c.text) }));
+      preCuesTranslated = [];
+      setTranslationStatus({
+        mode: "native",
+        provider: "native",
+        requestedProvider: "",
+        cueCount: preCuesNative.length,
+        totalCount: preCuesNative.length,
+        translatedCount: preCuesNative.length,
+        error: ""
+      });
+      log(`intercept: NATIVE ${trackLang} track, ${preCuesNative.length} cues (no translation needed)`);
+      return;
+    }
+
+    // Source-language track → merge broken cues, translate to target lang.
+    const sourceCues = mergeSplitCues(rawCues);
     sourceCuesCache = sourceCues;
-    log(`intercept: ${rawCues.length} raw → ${sourceCues.length} merged cues from`, url.slice(0, 90));
+    log(`intercept: ${rawCues.length} raw → ${sourceCues.length} merged source cues (${trackLang || "?"})`);
+
+    // If a native target track has already been loaded, skip translating — the
+    // native one is higher quality. We still cache source in case the user
+    // later switches to a language with no native track available.
+    if (preCuesNative.length) {
+      log("intercept: already have native cues, skipping translation");
+      return;
+    }
 
     const tl = toGoogleLang(STATE.settings.secondLang);
-    // Translate in batches; publish partial results as they arrive so the
-    // overlay can start showing translations before all batches finish.
-    await translateCuesProgressive(sourceCues, tl, (translatedSoFar) => {
-      preCues = translatedSoFar;
-    });
-    log(`intercept: pre-translated ${preCues.length} cues`);
+    // Kick off translation, but also try to grab a native track since seeing
+    // an intercept means CC just turned on — if we deferred earlier, retry now.
+    maybeRequestNativeTrack();
+    startCuesTranslation(sourceCues, tl, chooseSourceTranslationProvider(), "source captions intercepted");
+    maybeAskForPaidApi(sourceCues, tl, "source captions intercepted");
   });
 
   // ---------- caption parsers ----------
@@ -155,7 +454,26 @@
       cues.push({ start, end: start + dur, text });
     }
     cues.sort((a, b) => a.start - b.start);
-    return cues;
+    return coalesceIdenticalCues(cues);
+  }
+
+  function coalesceIdenticalCues(cues) {
+    // YouTube sometimes emits the same caption text as multiple overlapping
+    // events (continuation / shadow cues). Merge back-to-back cues with
+    // identical text into a single longer cue so we don't render the same
+    // line twice at overlapping timestamps.
+    if (cues.length < 2) return cues;
+    const out = [{ ...cues[0] }];
+    for (let i = 1; i < cues.length; i++) {
+      const prev = out[out.length - 1];
+      const c = cues[i];
+      if (prev.text === c.text && c.start <= prev.end + 0.1) {
+        prev.end = Math.max(prev.end, c.end);
+      } else {
+        out.push({ ...c });
+      }
+    }
+    return out;
   }
 
   function mergeSplitCues(cues) {
@@ -221,31 +539,102 @@
       });
       cues.sort((a, b) => a.start - b.start);
     } catch {}
-    return cues;
+    return coalesceIdenticalCues(cues);
   }
 
-  // ---------- Google Translate ----------
+  // ---------- Translation providers ----------
+  //
+  // Public entry points: translateText / translateBatch — they dispatch to
+  // the chosen provider (Google / Claude / OpenAI / Gemini) and fall back to
+  // Google if the LLM call fails.
+
   function toGoogleLang(code) {
+    // Google Translate uses zh-CN / zh-TW etc., YouTube uses zh-Hans / zh-Hant.
     const map = { "zh-hans": "zh-CN", "zh-hant": "zh-TW", "iw": "he", "jw": "jv" };
     const k = (code || "").toLowerCase();
     return map[k] || code;
   }
 
-  async function translateText(text, tl) {
+  // Human-readable names for prompt-driven LLM providers. Falls back to the
+  // BCP-47 code so obscure languages still work (just less prettily).
+  const LANG_NAMES = {
+    "zh-cn": "Simplified Chinese", "zh-hans": "Simplified Chinese",
+    "zh-tw": "Traditional Chinese", "zh-hant": "Traditional Chinese",
+    "en": "English", "ja": "Japanese", "ko": "Korean",
+    "es": "Spanish", "fr": "French", "de": "German", "it": "Italian",
+    "pt": "Portuguese", "ru": "Russian", "ar": "Arabic", "hi": "Hindi",
+    "th": "Thai", "vi": "Vietnamese", "id": "Indonesian", "ms": "Malay",
+    "tr": "Turkish", "nl": "Dutch", "pl": "Polish", "sv": "Swedish",
+    "no": "Norwegian", "da": "Danish", "fi": "Finnish", "cs": "Czech",
+    "el": "Greek", "he": "Hebrew", "uk": "Ukrainian", "ro": "Romanian",
+    "hu": "Hungarian", "bg": "Bulgarian", "fa": "Persian", "ur": "Urdu",
+    "bn": "Bengali", "ta": "Tamil", "te": "Telugu"
+  };
+  function langNameForPrompt(code) {
+    const k = (code || "").toLowerCase();
+    return LANG_NAMES[k] || code;
+  }
+
+  function buildLLMPrompt(texts, tl) {
+    const name = langNameForPrompt(tl);
+    const taggedCaptions = texts.map((text, i) => `[${i + 1}] ${text}`).join("\n");
+    return `Translate each of these ${texts.length} YouTube captions to ${name}. Keep one output item for every input item.
+
+Rules:
+- Keep translations concise (subtitle-length, not formal writing)
+- Preserve tone: questions, exclamations, humor, sarcasm
+- Use natural spoken language
+- Do NOT add trailing periods (。 or .); keep ! ? , ，
+- Do NOT merge, split, omit, or reorder any caption
+- Output ONLY ${texts.length} numbered lines in this exact format: [1] translation
+
+Captions:
+${taggedCaptions}
+
+Translations:`;
+  }
+
+  function parseLLMOutput(text, expectedCount) {
+    let lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+
+    const tagged = new Map();
+    for (const line of lines) {
+      const m = /^\[?(\d+)\]?\s*[.)：:\-]?\s*(.+)$/.exec(line);
+      if (!m) continue;
+      const idx = Number(m[1]);
+      if (idx >= 1 && idx <= expectedCount && m[2].trim()) {
+        tagged.set(idx, m[2].trim());
+      }
+    }
+    if (tagged.size === expectedCount) {
+      return Array.from({ length: expectedCount }, (_, i) => tagged.get(i + 1));
+    }
+
+    if (lines.length === expectedCount) return lines;
+    // Sometimes LLMs prefix "1. " / "1)" / "1:" despite instructions.
+    const stripped = lines
+      .map(l => l.replace(/^[\d]+[.\):\-]\s*/, "").trim())
+      .filter(l => l.length > 0);
+    if (stripped.length === expectedCount) return stripped;
+    throw new Error(`LLM returned ${lines.length} lines, expected ${expectedCount}`);
+  }
+
+  // ----- Google Translate (free, anonymous) -----
+  async function translateTextGoogle(text, tl, signal) {
     const url = new URL("https://translate.googleapis.com/translate_a/single");
     url.searchParams.set("client", "gtx");
     url.searchParams.set("sl", "auto");
     url.searchParams.set("tl", tl);
     url.searchParams.set("dt", "t");
     url.searchParams.set("q", text);
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), { signal });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     const out = (data[0] || []).map(seg => seg[0] || "").join("").trim();
     return out || text;
   }
 
-  async function translateBatch(texts, tl) {
+  async function translateBatchGoogle(texts, tl, signal) {
     const DELIM = "\n\n888777\n\n";
     const joined = texts.join(DELIM);
     try {
@@ -255,21 +644,156 @@
       url.searchParams.set("tl", tl);
       url.searchParams.set("dt", "t");
       url.searchParams.set("q", joined);
-      const res = await fetch(url.toString());
+      const res = await fetch(url.toString(), { signal });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       const combined = (data[0] || []).map(seg => seg[0] || "").join("");
       const parts = combined.split(/\n*\s*888777\s*\n*/);
       if (parts.length === texts.length) return parts.map(s => s.trim());
-      log("batch delim mismatch, per-line fallback", parts.length, "vs", texts.length);
-      return await Promise.all(texts.map(t => translateText(t, tl).catch(() => t)));
+      log("google batch delim mismatch, per-line fallback", parts.length, "vs", texts.length);
+      return await Promise.all(texts.map(t => translateTextGoogle(t, tl, signal).catch(() => t)));
     } catch (e) {
-      log("translateBatch error", e);
+      if (signal?.aborted) throw e;
+      log("translateBatchGoogle error", e);
       return texts;
     }
   }
 
-  async function translateCuesProgressive(cues, tl, onPartial) {
+  // ----- Claude (Anthropic) -----
+  async function translateBatchClaude(texts, tl, apiKey, signal) {
+    const prompt = buildLLMPrompt(texts, tl);
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        messages: [{ role: "user", content: prompt }]
+      }),
+      signal
+    });
+    if (!res.ok) throw new Error(`Claude ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const content = (data.content || []).filter(c => c.type === "text").map(c => c.text).join("");
+    return parseLLMOutput(content, texts.length);
+  }
+
+  // ----- OpenAI -----
+  async function translateBatchOpenAI(texts, tl, apiKey, signal) {
+    const prompt = buildLLMPrompt(texts, tl);
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1
+      }),
+      signal
+    });
+    if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const content = data?.choices?.[0]?.message?.content || "";
+    return parseLLMOutput(content, texts.length);
+  }
+
+  // ----- Google Gemini -----
+  async function translateBatchGemini(texts, tl, apiKey, signal) {
+    const prompt = buildLLMPrompt(texts, tl);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+      }),
+      signal
+    });
+    if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    return parseLLMOutput(content, texts.length);
+  }
+
+  // ----- DeepSeek -----
+  async function translateBatchDeepSeek(texts, tl, apiKey, signal) {
+    const prompt = buildLLMPrompt(texts, tl);
+    const res = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1
+      }),
+      signal
+    });
+    if (!res.ok) throw new Error(`DeepSeek ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const content = data?.choices?.[0]?.message?.content || "";
+    return parseLLMOutput(content, texts.length);
+  }
+
+  // ----- Dispatch layer -----
+  async function translateBatch(texts, tl, options = {}) {
+    const provider = options.provider || STATE.settings.translationProvider || "google";
+    const signal = options.signal;
+    const key = (STATE.settings.apiKeys || {})[provider];
+    try {
+      if (provider === "claude") {
+        if (!key) throw new Error("Claude API key not set");
+        const out = await translateBatchClaude(texts, tl, key, signal);
+        options.markProviderUsed?.("claude", provider, "");
+        return out;
+      }
+      if (provider === "openai") {
+        if (!key) throw new Error("OpenAI API key not set");
+        const out = await translateBatchOpenAI(texts, tl, key, signal);
+        options.markProviderUsed?.("openai", provider, "");
+        return out;
+      }
+      if (provider === "gemini") {
+        if (!key) throw new Error("Gemini API key not set");
+        const out = await translateBatchGemini(texts, tl, key, signal);
+        options.markProviderUsed?.("gemini", provider, "");
+        return out;
+      }
+      if (provider === "deepseek") {
+        if (!key) throw new Error("DeepSeek API key not set");
+        const out = await translateBatchDeepSeek(texts, tl, key, signal);
+        options.markProviderUsed?.("deepseek", provider, "");
+        return out;
+      }
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      options.markProviderUsed?.("google", provider, e.message || String(e));
+      log(`translateBatch (${provider}) failed, falling back to Google:`, e.message);
+    }
+    const out = await translateBatchGoogle(texts, tl, signal);
+    options.markProviderUsed?.("google", provider === "google" ? "google" : provider, "");
+    return out;
+  }
+
+  async function translateText(text, tl) {
+    // For single-string calls (fallback DOM-observation path) just wrap batch.
+    // Simpler than maintaining a separate single-string prompt per provider.
+    const [out] = await translateBatch([text], tl);
+    return out || text;
+  }
+
+  async function translateCuesProgressive(cues, tl, onPartial, options = {}) {
     const MAX_CHARS = 1200;
     const batches = [];
     let cur = [], curLen = 0;
@@ -295,7 +819,9 @@
         const b = nextBatch++;
         if (b >= batches.length) return;
         const batch = batches[b];
-        const translated = await translateBatch(batch.map(c => c.text), tl);
+        if (options.signal?.aborted || preCuesNative.length) return;
+        const translated = await translateBatch(batch.map(c => c.text), tl, options);
+        if (options.signal?.aborted || preCuesNative.length) return;
         for (let i = 0; i < batch.length; i++) {
           const orig = batch[i];
           const t = stripUnwantedPunctuation(translated[i] || orig.text);
@@ -311,25 +837,116 @@
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   }
 
+  async function startCuesTranslation(cues, tl, provider, reason) {
+    abortInflightTranslation(`start ${reason}`);
+    const controller = new AbortController();
+    translateAbortController = controller;
+    const generation = translateGeneration;
+    let providerUsed = "";
+    let fallbackError = "";
+    setTranslationStatus({
+      mode: "translating",
+      provider,
+      requestedProvider: provider,
+      cueCount: cues.length,
+      totalCount: cues.length,
+      translatedCount: 0,
+      error: ""
+    });
+    log(`translation start (${provider}): ${reason}`);
+    try {
+      await translateCuesProgressive(cues, tl, (translatedSoFar) => {
+        if (generation !== translateGeneration || controller.signal.aborted || preCuesNative.length) return;
+        preCuesTranslated = translatedSoFar;
+        setTranslationStatus({
+          mode: "translating",
+          provider: providerUsed || provider,
+          requestedProvider: provider,
+          cueCount: cues.length,
+          totalCount: cues.length,
+          translatedCount: translatedSoFar.length,
+          error: fallbackError
+        });
+      }, {
+        provider,
+        signal: controller.signal,
+        markProviderUsed: (used, requested, error) => {
+          providerUsed = used || providerUsed;
+          fallbackError = error || fallbackError;
+          if (generation === translateGeneration && !controller.signal.aborted && !preCuesNative.length) {
+            setTranslationStatus({
+              mode: used === requested ? "translating" : "fallback",
+              provider: used,
+              requestedProvider: requested,
+              cueCount: cues.length,
+              totalCount: cues.length,
+              translatedCount: preCuesTranslated.length,
+              error: fallbackError
+            });
+          }
+        }
+      });
+      if (generation === translateGeneration && !controller.signal.aborted && !preCuesNative.length) {
+        setTranslationStatus({
+          mode: providerUsed && providerUsed !== provider ? "fallback" : "translated",
+          provider: providerUsed || provider,
+          requestedProvider: provider,
+          cueCount: preCuesTranslated.length,
+          totalCount: cues.length,
+          translatedCount: preCuesTranslated.length,
+          error: fallbackError
+        });
+        log(`intercept: pre-translated ${preCuesTranslated.length} cues via ${providerUsed || provider}`);
+      } else {
+        log(`translation discarded (${provider}): ${reason}`);
+      }
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        setTranslationStatus({
+          mode: "error",
+          provider,
+          requestedProvider: provider,
+          cueCount: preCuesTranslated.length,
+          totalCount: cues.length,
+          translatedCount: preCuesTranslated.length,
+          error: e?.message || String(e)
+        });
+        log(`translation failed (${provider})`, e);
+      }
+    } finally {
+      if (translateAbortController === controller) translateAbortController = null;
+    }
+  }
+
   // ---------- render loop (uses preCues if available) ----------
   function findCuesAt(cues, t) {
-    // Return all cues active at time t, joined by newline.
+    // Return all cues active at time t, joined by newline. Dedupe by text so
+    // overlapping identical entries don't render twice (belt-and-suspenders
+    // over coalesceIdenticalCues, which handles adjacent-in-time duplicates).
+    const seen = new Set();
     const active = [];
     for (let i = 0; i < cues.length; i++) {
       const c = cues[i];
-      if (t >= c.start && t < c.end) active.push(c.text);
-      else if (c.start > t) break;
+      if (t >= c.start && t < c.end) {
+        if (!seen.has(c.text)) {
+          seen.add(c.text);
+          active.push(c.text);
+        }
+      } else if (c.start > t) break;
     }
     return active.join("\n");
   }
 
   function renderTick() {
     const video = document.querySelector("video.html5-main-video");
-    if (video && STATE.settings.enabled && preCues.length) {
-      const text = findCuesAt(preCues, video.currentTime);
-      if (text !== currentRenderedText) {
-        currentRenderedText = text;
-        renderOverlay(text);
+    // Native cues always win over translated ones.
+    const cues = preCuesNative.length ? preCuesNative : preCuesTranslated;
+    if (video && STATE.settings.enabled && cues.length) {
+      const text = findCuesAt(cues, video.currentTime);
+      const displayText = alignWithNativeLineBreaks(text);
+      if (displayText !== currentRenderedText) {
+        currentRenderedText = displayText;
+        renderOverlay(displayText);
       }
     }
     requestAnimationFrame(renderTick);
@@ -340,9 +957,61 @@
   let attachTimer = null;
 
   function currentNativeText() {
+    return currentNativeLines().join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  function currentNativeLines() {
+    const captionWindows = Array.from(document.querySelectorAll(".ytp-caption-window-container .caption-window"));
+    for (const win of captionWindows) {
+      const lineNodes = Array.from(win.querySelectorAll(".caption-visual-line, .ytp-caption-segment"));
+      if (!lineNodes.length) continue;
+      const rows = [];
+      for (const node of lineNodes) {
+        const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+        const rect = node.getBoundingClientRect();
+        if (!text || !rect.width || !rect.height) continue;
+        const row = rows.find(r => Math.abs(r.top - rect.top) < 8);
+        if (row) {
+          row.parts.push({ text, left: rect.left });
+          row.top = Math.min(row.top, rect.top);
+        } else {
+          rows.push({ top: rect.top, parts: [{ text, left: rect.left }] });
+        }
+      }
+      const lines = rows
+        .sort((a, b) => a.top - b.top)
+        .map(r => r.parts.sort((a, b) => a.left - b.left).map(p => p.text).join(" ").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      if (lines.length > 1) return lines;
+    }
+
+    const visualLines = Array.from(document.querySelectorAll(".captions-text .caption-visual-line"))
+      .map(n => (n.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    if (visualLines.length) return visualLines;
+
+    const segments = Array.from(document.querySelectorAll(".ytp-caption-segment"))
+      .map(n => ({ text: (n.textContent || "").trim(), rect: n.getBoundingClientRect() }))
+      .filter(s => s.text && s.rect.width && s.rect.height)
+      .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+
+    if (segments.length) {
+      const rows = [];
+      for (const seg of segments) {
+        const row = rows.find(r => Math.abs(r.top - seg.rect.top) < 6);
+        if (row) {
+          row.parts.push(seg);
+        } else {
+          rows.push({ top: seg.rect.top, parts: [seg] });
+        }
+      }
+      return rows
+        .sort((a, b) => a.top - b.top)
+        .map(r => r.parts.sort((a, b) => a.rect.left - b.rect.left).map(p => p.text).join(" ").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+    }
+
     const selectors = [
-      ".ytp-caption-segment",
-      ".captions-text .caption-visual-line",
       ".ytp-caption-window-container .caption-window",
       ".ytp-caption-window-container"
     ];
@@ -354,10 +1023,22 @@
           .join(" ")
           .replace(/\s+/g, " ")
           .trim();
-        if (text) return text;
+        if (text) return [text];
       }
     }
-    return "";
+    return [];
+  }
+
+  function normalizeForLineMatch(text) {
+    return (text || "").replace(/\s+/g, "");
+  }
+
+  function alignWithNativeLineBreaks(text) {
+    const nativeLines = currentNativeLines();
+    if (nativeLines.length < 2) return text.replace(/\n+/g, " ");
+    const nativeText = nativeLines.join("");
+    if (normalizeForLineMatch(nativeText) !== normalizeForLineMatch(text)) return text.replace(/\n+/g, " ");
+    return nativeLines.join("\n");
   }
 
   function attachCaptionObserver() {
@@ -382,8 +1063,8 @@
 
   async function pumpFromNative(force) {
     if (!STATE.settings.enabled || !STATE.settings.secondLang) return;
-    // If we're already rendering from pre-translated cues, skip the fallback.
-    if (preCues.length) return;
+    // If we're already rendering from any pre-loaded cues, skip the fallback.
+    if (preCuesNative.length || preCuesTranslated.length) return;
 
     const text = currentNativeText();
     if (!force && text === lastNativeText) return;
@@ -412,7 +1093,7 @@
     translateTimer = setTimeout(async () => {
       translateTimer = null;
       const t = pendingText;
-      if (!t || t !== lastNativeText || preCues.length) return;
+      if (!t || t !== lastNativeText || preCuesNative.length || preCuesTranslated.length) return;
       if (translationCache.has(t)) {
         currentRenderedText = translationCache.get(t);
         renderOverlay(currentRenderedText);
@@ -422,7 +1103,7 @@
         const raw = await translateText(t, toGoogleLang(lang));
         const translated = stripUnwantedPunctuation(raw);
         translationCache.set(t, translated);
-        if (lastNativeText === t && !preCues.length) {
+        if (lastNativeText === t && !preCuesNative.length && !preCuesTranslated.length) {
           currentRenderedText = translated;
           renderOverlay(translated);
         }
@@ -549,7 +1230,64 @@
       return;
     }
     el.style.display = "";
-    if (textEl) textEl.textContent = text;
+    if (textEl) {
+      textEl.textContent = text;
+      avoidOrphanCaptionLine(textEl, text);
+    }
+  }
+
+  function lineLengthsForTextNode(textNode) {
+    const rows = [];
+    const text = textNode.nodeValue || "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "\n") continue;
+      const range = document.createRange();
+      range.setStart(textNode, i);
+      range.setEnd(textNode, i + 1);
+      const rect = range.getBoundingClientRect();
+      range.detach();
+      if (!rect.width || !rect.height) continue;
+      let row = rows.find(r => Math.abs(r.top - rect.top) < 6);
+      if (!row) {
+        row = { top: rect.top, chars: 0 };
+        rows.push(row);
+      }
+      row.chars++;
+    }
+    return rows.sort((a, b) => a.top - b.top).map(r => r.chars);
+  }
+
+  function splitBalancedText(text) {
+    const compact = text.replace(/\s*\n+\s*/g, "").trim();
+    if (compact.length < 8) return text;
+    const target = Math.floor(compact.length / 2);
+    const forbiddenStart = /[，。！？、；：,.!?;:）】”’]/;
+    let best = target;
+    for (let offset = 0; offset <= 4; offset++) {
+      for (const idx of [target + offset, target - offset]) {
+        if (idx <= 2 || idx >= compact.length - 2) continue;
+        if (forbiddenStart.test(compact[idx])) continue;
+        best = idx;
+        offset = 99;
+        break;
+      }
+    }
+    return `${compact.slice(0, best)}\n${compact.slice(best)}`;
+  }
+
+  function avoidOrphanCaptionLine(textEl, originalText) {
+    if (!originalText || originalText.includes("\n")) return;
+    const textNode = textEl.firstChild;
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return;
+    const lines = lineLengthsForTextNode(textNode);
+    if (lines.length !== 2) return;
+    const last = lines[lines.length - 1];
+    const first = lines[0];
+    if (last > 2 || first < 8) return;
+
+    const balanced = splitBalancedText(originalText);
+    if (balanced !== originalText) textEl.textContent = balanced;
   }
 
   // ---------- SPA nav handling ----------
@@ -561,9 +1299,21 @@
         const m = /[?&]v=([^&]+)/.exec(location.search);
         const newVid = m ? m[1] : null;
         if (newVid !== STATE.videoId) {
+          abortInflightTranslation("video changed");
+          closePaidApiPrompt();
+          setTranslationStatus({
+            mode: "idle",
+            provider: "",
+            requestedProvider: "",
+            cueCount: 0,
+            error: ""
+          });
           STATE.videoId = newVid;
-          preCues = [];
+          preCuesNative = [];
+          preCuesTranslated = [];
           sourceCuesCache = null;
+          availableTracks = [];
+          nativeTargetRequested = false;
           seenTrackKeys.clear();
           translationCache.clear();
           lastNativeText = "";
@@ -580,12 +1330,18 @@
       const m = /[?&]v=([^&]+)/.exec(location.search);
       sendResponse({
         videoId: m ? m[1] : null,
-        tracks: [],
+        tracks: availableTracks,
         translations: [],
         settings: STATE.settings,
         nativeCaptionText: currentNativeText(),
-        preCuesLoaded: preCues.length
+        translationStatus,
+        preCuesLoaded: preCuesNative.length + preCuesTranslated.length,
+        usingNativeTrack: preCuesNative.length > 0
       });
+      return true;
+    }
+    if (msg?.type === "YDS_APPROVE_PAID_API") {
+      sendResponse(approvePaidApiForCurrentVideo("popup approval"));
       return true;
     }
   });

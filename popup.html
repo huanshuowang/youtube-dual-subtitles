@@ -14,7 +14,7 @@
     h1 { font-size: 14px; margin: 0 0 10px; }
     .row { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; gap: 8px; }
     .row label { flex: 0 0 auto; }
-    .row select, .row input[type="color"], .row input[type="number"] {
+    .row select, .row input[type="color"], .row input[type="number"], .row input[type="password"], .row input[type="text"] {
       flex: 1 1 auto;
       min-width: 0;
       padding: 4px 6px;
@@ -23,9 +23,40 @@
       background: transparent;
       color: inherit;
     }
+    .apiKeyWrap { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+    .apiKeyWrap input { width: 100%; }
+    .apiKeyWrap input:disabled { opacity: 0.72; background: rgba(127,127,127,0.12); cursor: pointer; }
+    .keyState { flex: 0 0 auto; min-width: 20px; text-align: center; font-size: 14px; }
+    .keyState.ok { color: #24a148; }
+    .keyState.missing { color: #d97706; }
+    .keyEdit {
+      flex: 0 0 auto;
+      padding: 4px 7px;
+      border-radius: 4px;
+      border: 1px solid rgba(127,127,127,0.4);
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 12px;
+    }
     .muted { color: #888; font-size: 12px; }
     .status { margin-top: 10px; padding: 8px; border-radius: 6px; background: rgba(127,127,127,0.12); font-size: 12px; }
     .switch { display: inline-flex; align-items: center; gap: 6px; }
+    .apihelp { margin: -4px 0 6px 0; font-size: 11.5px; color: #888; text-align: right; }
+    .apihelp a { color: inherit; }
+    .paidControls { display: none; margin: 6px 0 2px; }
+    .paidControls button {
+      width: 100%;
+      padding: 7px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(127,127,127,0.45);
+      background: rgba(62,166,255,0.16);
+      color: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .askRow { display: none; justify-content: flex-start; }
+    hr { border: none; border-top: 1px solid rgba(127,127,127,0.2); margin: 12px 0 8px; }
   </style>
 </head>
 <body>
@@ -40,6 +71,37 @@
     <label for="lang">第二语言</label>
     <select id="lang"></select>
   </div>
+
+  <div class="row">
+    <label for="provider">翻译源</label>
+    <select id="provider">
+      <option value="google">Google Translate（免费）</option>
+      <option value="claude">Claude Haiku · 高质量</option>
+      <option value="openai">OpenAI GPT-4o mini · 高质量</option>
+      <option value="gemini">Google Gemini · 有免费额度</option>
+      <option value="deepseek">DeepSeek · 高性价比</option>
+    </select>
+  </div>
+
+  <div class="row" id="apiKeyRow" style="display:none;">
+    <label for="apiKey">API Key</label>
+    <div class="apiKeyWrap">
+      <input type="password" id="apiKey" placeholder="粘贴到这里" autocomplete="off" spellcheck="false" />
+      <span id="apiKeyState" class="keyState" title="API Key 状态"></span>
+      <button type="button" id="editApiKey" class="keyEdit">编辑</button>
+    </div>
+  </div>
+  <div class="apihelp" id="apiKeyHelp" style="display:none;">
+    <a id="apiKeyLink" href="#" target="_blank" rel="noopener">获取 key →</a>
+  </div>
+  <div class="paidControls" id="paidControls">
+    <button type="button" id="usePaidApi">本视频使用所选 API 翻译</button>
+  </div>
+  <div class="row askRow" id="askPaidRow">
+    <label class="switch"><input type="checkbox" id="askPaidApi" /> 每次打开视频自动询问是否使用付费 API</label>
+  </div>
+
+  <hr />
 
   <div class="row">
     <label for="bottomOffset">垂直位置</label>

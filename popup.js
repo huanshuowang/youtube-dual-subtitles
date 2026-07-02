@@ -7,8 +7,40 @@ const DEFAULTS = {
   bottomOffset: 22,
   fontSize: 22,
   color: "#ffffff",
-  background: "rgba(0,0,0,0.6)"
+  background: "rgba(0,0,0,0.6)",
+  translationProvider: "google",
+  paidApiAskEachVideo: false,
+  apiKeys: {}
 };
+
+// Where users go to grab a key for each provider.
+const KEY_LINKS = {
+  claude: "https://console.anthropic.com/settings/keys",
+  openai: "https://platform.openai.com/api-keys",
+  gemini: "https://aistudio.google.com/app/apikey",
+  deepseek: "https://platform.deepseek.com/api_keys"
+};
+
+const KEY_PLACEHOLDERS = {
+  claude: "sk-ant-...",
+  openai: "sk-...",
+  gemini: "AIza...",
+  deepseek: "sk-..."
+};
+
+const PROVIDER_NAMES = {
+  google: "Google Translate",
+  claude: "Claude",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  deepseek: "DeepSeek",
+  native: "视频自带字幕"
+};
+
+let activeTabId = null;
+let apiKeySaveTimer = null;
+let statusPollTimer = null;
+let apiKeyEditing = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,6 +64,17 @@ async function askContent(tabId) {
   return new Promise((resolve) => {
     try {
       chrome.tabs.sendMessage(tabId, { type: "YDS_GET_INFO" }, (resp) => {
+        if (chrome.runtime.lastError) resolve(null);
+        else resolve(resp || null);
+      });
+    } catch { resolve(null); }
+  });
+}
+
+async function sendContent(tabId, msg) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, msg, (resp) => {
         if (chrome.runtime.lastError) resolve(null);
         else resolve(resp || null);
       });
@@ -258,6 +301,120 @@ async function save(partial) {
   await chrome.storage.sync.set({ ydsSettings: merged });
 }
 
+// Update just the API key for the currently selected provider.
+async function saveApiKey(provider, value) {
+  const cur = (await chrome.storage.sync.get(["ydsSettings"])).ydsSettings || {};
+  const apiKeys = { ...(cur.apiKeys || {}) };
+  if (value) apiKeys[provider] = value;
+  else delete apiKeys[provider];
+  await chrome.storage.sync.set({ ydsSettings: { ...DEFAULTS, ...cur, apiKeys } });
+}
+
+function applyProviderUI(settings) {
+  const p = $("provider").value;
+  const needsKey = p !== "google";
+  $("apiKeyRow").style.display = needsKey ? "" : "none";
+  $("apiKeyHelp").style.display = needsKey ? "" : "none";
+  $("paidControls").style.display = needsKey ? "block" : "none";
+  $("askPaidRow").style.display = needsKey ? "flex" : "none";
+  $("askPaidApi").checked = !!settings.paidApiAskEachVideo;
+  if (needsKey) {
+    const keys = settings.apiKeys || {};
+    const key = keys[p] || "";
+    $("apiKey").value = key;
+    $("apiKey").placeholder = KEY_PLACEHOLDERS[p] || "粘贴到这里";
+    $("apiKeyLink").href = KEY_LINKS[p] || "#";
+    $("apiKeyLink").textContent = `获取 ${PROVIDER_NAMES[p] || p} key →`;
+    $("usePaidApi").textContent = `本视频使用 ${providerName(p)} API 翻译`;
+    setApiKeyEditing(!key);
+    updateApiKeyState(!!key);
+  }
+}
+
+function setApiKeyEditing(editing) {
+  apiKeyEditing = editing;
+  const input = $("apiKey");
+  input.disabled = !editing && !!input.value;
+  $("editApiKey").textContent = editing ? "完成" : "编辑";
+  if (editing) setTimeout(() => input.focus(), 0);
+}
+
+function updateApiKeyState(hasKey) {
+  const el = $("apiKeyState");
+  el.textContent = hasKey ? "✓" : "!";
+  el.className = `keyState ${hasKey ? "ok" : "missing"}`;
+  el.title = hasKey ? "已保存 API Key" : "尚未填写 API Key";
+}
+
+function providerName(provider) {
+  return PROVIDER_NAMES[provider] || provider || "未知";
+}
+
+function statusTextFor(info, tab) {
+  if (!tab) return "打开 www.youtube.com 上的视频页面即可使用。";
+  if (!info || !info.videoId) return "无法与页面通信。请刷新 YouTube 页面后再试。";
+
+  const st = info.translationStatus || {};
+  if (st.mode === "native" || info.usingNativeTrack) {
+    return `当前使用：视频自带 ${$("lang").value || "目标语言"} 字幕（未调用翻译 API）。`;
+  }
+  if (st.mode === "translated") {
+    return `已完成：${providerName(st.provider)} 翻译，已加载 ${st.cueCount || 0} 条字幕。`;
+  }
+  if (st.mode === "translating") {
+    const done = st.translatedCount || 0;
+    const total = st.totalCount || st.cueCount || 0;
+    const progress = total ? `（${done}/${total}）` : "";
+    return `正在调用：${providerName(st.provider)} API 翻译字幕${progress}…`;
+  }
+  if (st.mode === "fallback") {
+    if ((st.error || "").startsWith("用户取消")) {
+      return `当前使用：Google Translate（已取消 ${providerName(st.requestedProvider)} API）。`;
+    }
+    return `当前使用：Google Translate（${providerName(st.requestedProvider)} 调用失败后回退）。${st.error ? "错误：" + st.error : ""}`;
+  }
+  if (st.mode === "awaiting_paid_confirmation") {
+    return `等待确认：点击上方按钮后，本视频才会使用 ${providerName(st.requestedProvider)} API。未确认前使用免费 Google Translate。`;
+  }
+  if (st.mode === "need_api_key") {
+    return `${providerName(st.requestedProvider)} 需要 API Key。未填写前会使用免费 Google Translate。`;
+  }
+  if (st.mode === "error") {
+    return `${providerName(st.requestedProvider || st.provider)} 翻译失败：${st.error || "未知错误"}`;
+  }
+  if (info.nativeCaptionText) {
+    return "已检测到 YouTube 字幕。选择翻译源并填写 key 后，页面会自动重新翻译；当前还没有完成翻译。";
+  }
+  return "请先点开 YouTube 播放器右下角的 CC 按钮开启原生字幕，扩展会自动翻译并叠加第二种语言。";
+}
+
+async function refreshStatusSoon(delay = 900) {
+  if (!activeTabId) return;
+  setTimeout(async () => {
+    const info = await askContent(activeTabId);
+    $("status").textContent = statusTextFor(info, { id: activeTabId });
+  }, delay);
+}
+
+function refreshStatusSeries() {
+  refreshStatusSoon(900);
+  refreshStatusSoon(2500);
+  refreshStatusSoon(6000);
+}
+
+function startStatusPolling() {
+  if (!activeTabId || statusPollTimer) return;
+  statusPollTimer = setInterval(async () => {
+    const info = await askContent(activeTabId);
+    $("status").textContent = statusTextFor(info, { id: activeTabId });
+    const mode = info?.translationStatus?.mode;
+    if (mode && mode !== "translating" && mode !== "awaiting_paid_confirmation") {
+      clearInterval(statusPollTimer);
+      statusPollTimer = null;
+    }
+  }, 1000);
+}
+
 async function init() {
   const stored = (await chrome.storage.sync.get(["ydsSettings"])).ydsSettings || {};
   const settings = { ...DEFAULTS, ...stored };
@@ -268,8 +425,12 @@ async function init() {
   $("fontSize").value = settings.fontSize;
   $("color").value = settings.color;
   $("bgAlpha").value = bgToAlpha(settings.background);
+  $("provider").value = settings.translationProvider || "google";
+  $("askPaidApi").checked = !!settings.paidApiAskEachVideo;
+  applyProviderUI(settings);
 
   const tab = await getActiveYouTubeTab();
+  activeTabId = tab ? tab.id : null;
   let info = null;
   if (tab) info = await askContent(tab.id);
 
@@ -277,21 +438,20 @@ async function init() {
   $("lang").value = settings.secondLang || "";
 
   if (!tab) {
-    $("status").textContent = "打开 www.youtube.com 上的视频页面即可使用。";
     $("videoInfo").textContent = "";
   } else if (info && info.videoId) {
     $("videoInfo").textContent = info.videoId;
-    if (info.nativeCaptionText) {
-      $("status").textContent = "已检测到 YouTube 字幕。第二语言会自动翻译并叠加显示。";
-    } else {
-      $("status").textContent = "请先点开 YouTube 播放器右下角的 CC 按钮开启原生字幕，扩展会自动翻译并叠加第二种语言。";
-    }
-  } else {
-    $("status").textContent = "无法与页面通信。请刷新 YouTube 页面后再试。";
   }
+  $("status").textContent = statusTextFor(info, tab);
+  if (info?.translationStatus?.mode === "translating") startStatusPolling();
 
   $("enabled").addEventListener("change", (e) => save({ enabled: e.target.checked }));
-  $("lang").addEventListener("change", (e) => save({ secondLang: e.target.value }));
+  $("lang").addEventListener("change", async (e) => {
+    await save({ secondLang: e.target.value });
+    $("status").textContent = "已切换目标语言。页面正在重新检测 native 字幕或翻译…";
+    refreshStatusSeries();
+    startStatusPolling();
+  });
   $("bottomOffset").addEventListener("input", (e) => {
     const v = parseInt(e.target.value, 10) || 0;
     $("bottomOffsetVal").textContent = `${v}%`;
@@ -300,6 +460,66 @@ async function init() {
   $("fontSize").addEventListener("change", (e) => save({ fontSize: parseInt(e.target.value, 10) || 22 }));
   $("color").addEventListener("change", (e) => save({ color: e.target.value }));
   $("bgAlpha").addEventListener("input", (e) => save({ background: alphaToBg(parseInt(e.target.value, 10)) }));
+
+  $("provider").addEventListener("change", async (e) => {
+    await save({ translationProvider: e.target.value });
+    const cur = (await chrome.storage.sync.get(["ydsSettings"])).ydsSettings || {};
+    applyProviderUI({ ...DEFAULTS, ...cur });
+    $("status").textContent = `已切换为 ${providerName(e.target.value)}。未点击确认前不会调用付费 API。`;
+    refreshStatusSeries();
+    startStatusPolling();
+  });
+  $("askPaidApi").addEventListener("change", async (e) => {
+    await save({ paidApiAskEachVideo: e.target.checked });
+    $("status").textContent = e.target.checked
+      ? "已开启：每次打开视频会自动询问是否使用付费 API。"
+      : "已关闭：付费 API 只会在你点击“本视频使用所选 API 翻译”后调用。";
+  });
+  $("usePaidApi").addEventListener("click", async () => {
+    if (!activeTabId) return;
+    const provider = $("provider").value;
+    $("status").textContent = `正在为本视频启动 ${providerName(provider)} API 翻译…`;
+    const resp = await sendContent(activeTabId, { type: "YDS_APPROVE_PAID_API" });
+    if (!resp?.ok) {
+      $("status").textContent = resp?.error || "无法启动付费 API。请确认页面已打开字幕并刷新后重试。";
+      return;
+    }
+    refreshStatusSeries();
+    startStatusPolling();
+  });
+  $("editApiKey").addEventListener("click", async () => {
+    if (apiKeyEditing) {
+      const value = $("apiKey").value.trim();
+      await saveApiKey($("provider").value, value);
+      updateApiKeyState(!!value);
+      setApiKeyEditing(false);
+      $("status").textContent = value
+        ? `已保存 ${providerName($("provider").value)} API Key。需要点击上方按钮才会调用。`
+        : `${providerName($("provider").value)} API Key 已清空。`;
+    } else {
+      setApiKeyEditing(true);
+    }
+  });
+  $("apiKey").addEventListener("click", () => {
+    if ($("apiKey").disabled) setApiKeyEditing(true);
+  });
+  $("apiKey").addEventListener("input", (e) => {
+    updateApiKeyState(!!e.target.value.trim());
+    if (apiKeySaveTimer) clearTimeout(apiKeySaveTimer);
+    apiKeySaveTimer = setTimeout(async () => {
+      await saveApiKey($("provider").value, e.target.value.trim());
+      $("status").textContent = `已保存 ${providerName($("provider").value)} API Key。需要点击上方按钮才会调用。`;
+    }, 500);
+  });
+  $("apiKey").addEventListener("change", async (e) => {
+    if (apiKeySaveTimer) clearTimeout(apiKeySaveTimer);
+    const value = e.target.value.trim();
+    await saveApiKey($("provider").value, value);
+    updateApiKeyState(!!value);
+    $("status").textContent = value
+      ? `已保存 ${providerName($("provider").value)} API Key。需要点击上方按钮才会调用。`
+      : `${providerName($("provider").value)} API Key 已清空。`;
+  });
 }
 
 init().catch((err) => {

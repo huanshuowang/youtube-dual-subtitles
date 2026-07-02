@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build a minimal zip for release. Only the files Chrome actually needs plus
-# LICENSE and README. Skips docs/, .gitignore, and anything under .git/.
+# Build a minimal zip for release. Only include files Chrome needs to run the
+# extension after the user unzips it and loads the folder.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -16,7 +16,7 @@ echo "Building ${OUT_NAME} v${VERSION}"
 rm -rf dist
 mkdir -p "${STAGE_DIR}/icons"
 
-cp manifest.json content.js inject.js overlay.css popup.html popup.js LICENSE README.md \
+cp manifest.json content.js inject.js overlay.css popup.html popup.js \
    "${STAGE_DIR}/"
 cp icons/icon16.png icons/icon48.png icons/icon128.png "${STAGE_DIR}/icons/"
 

@@ -13,6 +13,10 @@
   pointer-events: none;
   z-index: 999999 !important;
   white-space: pre-wrap;
+  text-wrap: balance;
+  word-break: normal;
+  line-break: strict;
+  overflow-wrap: normal;
 }
 
 /* The drag handle sits just above the overlay and only becomes visible
@@ -47,4 +51,71 @@
 .yds-overlay.yds-dragging {
   outline: 2px dashed rgba(255, 255, 255, 0.7);
   outline-offset: 2px;
+}
+
+/* Set briefly by inject.js while we ask YouTube's player to swap tracks so we
+   can intercept the user's target-language track. Hides YouTube's own caption
+   strip so the user doesn't see a flash of the wrong language. */
+body.yds-suppressing-native .ytp-caption-window-container {
+  opacity: 0 !important;
+  transition: opacity 0.1s ease;
+}
+
+.yds-paid-api-confirm {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 2147483647;
+  font-family: "YouTube Sans", "Roboto", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+}
+
+.yds-paid-api-card {
+  width: min(420px, calc(100vw - 40px));
+  padding: 18px;
+  border-radius: 8px;
+  background: rgba(24, 24, 24, 0.96);
+  color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.yds-paid-api-title {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin-bottom: 8px;
+}
+
+.yds-paid-api-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.82);
+  margin-bottom: 16px;
+}
+
+.yds-paid-api-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.yds-paid-api-actions button {
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.yds-paid-api-free {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.yds-paid-api-use {
+  background: #3ea6ff;
+  color: #06121d;
 }
