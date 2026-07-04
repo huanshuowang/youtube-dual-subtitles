@@ -17,3 +17,5 @@ npm-debug.log*
 *.zip
 *.crx
 dist/
+# 例外：网站提供下载的扩展包需要跟随仓库发布
+!docs/youtube-dual-subtitles-1.2.0.zip
