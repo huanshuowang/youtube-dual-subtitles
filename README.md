@@ -3,6 +3,7 @@
 > v1.2.0 · 在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。
 
 **📖 项目主页：** https://huanshuowang.github.io/youtube-dual-subtitles/
+**🔒 隐私政策：** https://huanshuowang.github.io/youtube-dual-subtitles/privacy.html
 
 ---
 
