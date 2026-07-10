@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "YouTube Dual Subtitles"
+  },
+  "appDesc": {
+    "message": "在 YouTube 上同時顯示兩種語言的字幕。使用自帶字幕或 Google 免費翻譯，支援使用 Claude / OpenAI / Gemini / DeepSeek 翻譯。"
+  }
+}

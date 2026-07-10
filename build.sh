@@ -16,9 +16,10 @@ echo "Building ${OUT_NAME} v${VERSION}"
 rm -rf dist
 mkdir -p "${STAGE_DIR}/icons"
 
-cp manifest.json content.js inject.js overlay.css popup.html popup.js \
+cp manifest.json content.js inject.js i18n.js overlay.css popup.html popup.js \
    "${STAGE_DIR}/"
 cp icons/icon16.png icons/icon48.png icons/icon128.png "${STAGE_DIR}/icons/"
+cp -R _locales "${STAGE_DIR}/_locales"
 
 ( cd dist && zip -r -q "${OUT_NAME}.zip" "${OUT_NAME}" )
 rm -rf "${STAGE_DIR}"

@@ -60,26 +60,26 @@
   </style>
 </head>
 <body>
-  <h1>双语字幕 · Dual Subtitles</h1>
+  <h1 data-i18n="appTitle">双语字幕 · Dual Subtitles</h1>
 
   <div class="row">
-    <label class="switch"><input type="checkbox" id="enabled" /> 启用</label>
+    <label class="switch"><input type="checkbox" id="enabled" /> <span data-i18n="enable">启用</span></label>
     <span class="muted" id="videoInfo"></span>
   </div>
 
   <div class="row">
-    <label for="lang">第二语言</label>
+    <label for="lang" data-i18n="secondLanguage">第二语言</label>
     <select id="lang"></select>
   </div>
 
   <div class="row">
-    <label for="provider">翻译源</label>
+    <label for="provider" data-i18n="translationSource">翻译源</label>
     <select id="provider">
-      <option value="google">Google Translate（免费）</option>
-      <option value="claude">Claude Haiku · 高质量</option>
-      <option value="openai">OpenAI GPT-4o mini · 高质量</option>
-      <option value="gemini">Google Gemini · 有免费额度</option>
-      <option value="deepseek">DeepSeek · 高性价比</option>
+      <option value="google" data-i18n="providerGoogle">Google Translate（免费）</option>
+      <option value="claude" data-i18n="providerClaude">Claude Haiku · 高质量</option>
+      <option value="openai" data-i18n="providerOpenai">OpenAI GPT-4o mini · 高质量</option>
+      <option value="gemini" data-i18n="providerGemini">Google Gemini · 有免费额度</option>
+      <option value="deepseek" data-i18n="providerDeepseek">DeepSeek · 高性价比</option>
     </select>
   </div>
 
@@ -95,37 +95,38 @@
     <a id="apiKeyLink" href="#" target="_blank" rel="noopener">获取 key →</a>
   </div>
   <div class="paidControls" id="paidControls">
-    <button type="button" id="usePaidApi">本视频使用所选 API 翻译</button>
+    <button type="button" id="usePaidApi" data-i18n="usePaidApiBtnGeneric">本视频使用所选 API 翻译</button>
   </div>
   <div class="row askRow" id="askPaidRow">
-    <label class="switch"><input type="checkbox" id="askPaidApi" /> 每次打开视频自动询问是否使用付费 API</label>
+    <label class="switch"><input type="checkbox" id="askPaidApi" /> <span data-i18n="askEachVideo">每次打开视频自动询问是否使用付费 API</span></label>
   </div>
 
   <hr />
 
   <div class="row">
-    <label for="bottomOffset">垂直位置</label>
+    <label for="bottomOffset" data-i18n="verticalPosition">垂直位置</label>
     <input type="range" id="bottomOffset" min="0" max="90" step="1" />
     <span class="muted" id="bottomOffsetVal" style="flex:0 0 auto; min-width:36px; text-align:right;"></span>
   </div>
 
   <div class="row">
-    <label for="fontSize">字号 (px)</label>
+    <label for="fontSize" data-i18n="fontSizePx">字号 (px)</label>
     <input type="number" id="fontSize" min="10" max="60" step="1" />
   </div>
 
   <div class="row">
-    <label for="color">文字颜色</label>
+    <label for="color" data-i18n="textColor">文字颜色</label>
     <input type="color" id="color" />
   </div>
 
   <div class="row">
-    <label for="bgAlpha">背景透明度</label>
+    <label for="bgAlpha" data-i18n="bgOpacity">背景透明度</label>
     <input type="range" id="bgAlpha" min="0" max="100" step="1" />
   </div>
 
-  <div class="status" id="status">正在获取当前视频的字幕信息…</div>
+  <div class="status" id="status" data-i18n="loadingInfo">正在获取当前视频的字幕信息…</div>
 
+  <script src="i18n.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Dual Subtitles",
+  "name": "__MSG_appName__",
   "version": "1.2.0",
-  "description": "在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。",
+  "description": "__MSG_appDesc__",
+  "default_locale": "en",
   "permissions": ["storage", "scripting"],
   "host_permissions": [
     "*://*.youtube.com/*",
@@ -30,7 +31,7 @@
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*"],
-      "js": ["content.js"],
+      "js": ["i18n.js", "content.js"],
       "css": ["overlay.css"],
       "run_at": "document_start",
       "all_frames": false

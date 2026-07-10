@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "YouTube Dual Subtitles"
+  },
+  "appDesc": {
+    "message": "Show two subtitle languages on YouTube at once. Uses native tracks or free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek translation."
+  }
+}

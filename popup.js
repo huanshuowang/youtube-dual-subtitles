@@ -3,7 +3,7 @@
 
 const DEFAULTS = {
   enabled: true,
-  secondLang: "zh-Hans",
+  secondLang: ydsDefaultSecondLang(),
   bottomOffset: 22,
   fontSize: 22,
   color: "#ffffff",
@@ -34,8 +34,19 @@ const PROVIDER_NAMES = {
   openai: "OpenAI",
   gemini: "Gemini",
   deepseek: "DeepSeek",
-  native: "视频自带字幕"
+  get native() { return ydsT("providerNative"); }
 };
+
+// Swap static popup text to the browser's UI language.
+function localizeStaticDom() {
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    el.textContent = ydsT(el.dataset.i18n);
+  }
+  document.title = ydsT("appTitle");
+  $("apiKey").placeholder = ydsT("pasteHere");
+  $("apiKeyState").title = ydsT("keyStateTitle");
+  $("editApiKey").textContent = ydsT("edit");
+}
 
 let activeTabId = null;
 let apiKeySaveTimer = null;
@@ -96,17 +107,17 @@ function populateLanguages(info) {
     sel.appendChild(opt);
   };
 
-  add("", "— 关闭第二字幕 —");
+  add("", ydsT("offSecondSub"));
 
   // Native tracks on this video first.
   if (info?.tracks?.length) {
     const group = document.createElement("optgroup");
-    group.label = "该视频原生字幕";
+    group.label = ydsT("groupNative");
     sel.appendChild(group);
     for (const t of info.tracks) {
       const opt = document.createElement("option");
       opt.value = t.languageCode;
-      opt.textContent = `${t.name} (${t.languageCode})${t.kind === "asr" ? " · 自动生成" : ""}`;
+      opt.textContent = `${t.name} (${t.languageCode})${t.kind === "asr" ? ydsT("asrSuffix") : ""}`;
       group.appendChild(opt);
       seen.add(t.languageCode);
     }
@@ -115,7 +126,7 @@ function populateLanguages(info) {
   // Auto-translation targets.
   if (info?.translations?.length) {
     const group = document.createElement("optgroup");
-    group.label = "自动翻译";
+    group.label = ydsT("groupAutoTranslate");
     sel.appendChild(group);
     for (const t of info.translations) {
       if (seen.has(t.languageCode)) continue;
@@ -139,7 +150,7 @@ function populateLanguages(info) {
     ["de", "Deutsch"]
   ];
   const commonGroup = document.createElement("optgroup");
-  commonGroup.label = "常用";
+  commonGroup.label = ydsT("groupCommon");
   sel.appendChild(commonGroup);
   for (const [c, n] of commons) {
     if (seen.has(c)) continue;
@@ -152,7 +163,7 @@ function populateLanguages(info) {
 
   // Full Google Translate language list.
   const allGroup = document.createElement("optgroup");
-  allGroup.label = "全部语言";
+  allGroup.label = ydsT("groupAll");
   sel.appendChild(allGroup);
   for (const [c, n] of ALL_LANGS) {
     if (seen.has(c)) continue;
@@ -322,10 +333,10 @@ function applyProviderUI(settings) {
     const keys = settings.apiKeys || {};
     const key = keys[p] || "";
     $("apiKey").value = key;
-    $("apiKey").placeholder = KEY_PLACEHOLDERS[p] || "粘贴到这里";
+    $("apiKey").placeholder = KEY_PLACEHOLDERS[p] || ydsT("pasteHere");
     $("apiKeyLink").href = KEY_LINKS[p] || "#";
-    $("apiKeyLink").textContent = `获取 ${PROVIDER_NAMES[p] || p} key →`;
-    $("usePaidApi").textContent = `本视频使用 ${providerName(p)} API 翻译`;
+    $("apiKeyLink").textContent = ydsT("getKeyLink", { name: PROVIDER_NAMES[p] || p });
+    $("usePaidApi").textContent = ydsT("usePaidApiBtn", { name: providerName(p) });
     setApiKeyEditing(!key);
     updateApiKeyState(!!key);
   }
@@ -335,7 +346,7 @@ function setApiKeyEditing(editing) {
   apiKeyEditing = editing;
   const input = $("apiKey");
   input.disabled = !editing && !!input.value;
-  $("editApiKey").textContent = editing ? "完成" : "编辑";
+  $("editApiKey").textContent = editing ? ydsT("done") : ydsT("edit");
   if (editing) setTimeout(() => input.focus(), 0);
 }
 
@@ -343,49 +354,55 @@ function updateApiKeyState(hasKey) {
   const el = $("apiKeyState");
   el.textContent = hasKey ? "✓" : "!";
   el.className = `keyState ${hasKey ? "ok" : "missing"}`;
-  el.title = hasKey ? "已保存 API Key" : "尚未填写 API Key";
+  el.title = hasKey ? ydsT("keySavedTitle") : ydsT("keyMissingTitle");
 }
 
 function providerName(provider) {
-  return PROVIDER_NAMES[provider] || provider || "未知";
+  return PROVIDER_NAMES[provider] || provider || ydsT("providerUnknown");
 }
 
 function statusTextFor(info, tab) {
-  if (!tab) return "打开 www.youtube.com 上的视频页面即可使用。";
-  if (!info || !info.videoId) return "无法与页面通信。请刷新 YouTube 页面后再试。";
+  if (!tab) return ydsT("statusNoTab");
+  if (!info || !info.videoId) return ydsT("statusNoComm");
 
   const st = info.translationStatus || {};
   if (st.mode === "native" || info.usingNativeTrack) {
-    return `当前使用：视频自带 ${$("lang").value || "目标语言"} 字幕（未调用翻译 API）。`;
+    return ydsT("statusNative", { lang: $("lang").value || ydsT("statusNativeFallbackLang") });
   }
   if (st.mode === "translated") {
-    return `已完成：${providerName(st.provider)} 翻译，已加载 ${st.cueCount || 0} 条字幕。`;
+    return ydsT("statusDone", { name: providerName(st.provider), count: st.cueCount || 0 });
   }
   if (st.mode === "translating") {
     const done = st.translatedCount || 0;
     const total = st.totalCount || st.cueCount || 0;
-    const progress = total ? `（${done}/${total}）` : "";
-    return `正在调用：${providerName(st.provider)} API 翻译字幕${progress}…`;
+    const progress = total ? ydsT("progressFmt", { done, total }) : "";
+    return ydsT("statusTranslating", { name: providerName(st.provider), progress });
   }
   if (st.mode === "fallback") {
-    if ((st.error || "").startsWith("用户取消")) {
-      return `当前使用：Google Translate（已取消 ${providerName(st.requestedProvider)} API）。`;
+    if (st.declined || (st.error || "").startsWith("用户取消")) {
+      return ydsT("statusCancelledFallback", { name: providerName(st.requestedProvider) });
     }
-    return `当前使用：Google Translate（${providerName(st.requestedProvider)} 调用失败后回退）。${st.error ? "错误：" + st.error : ""}`;
+    return ydsT("statusFallback", {
+      name: providerName(st.requestedProvider),
+      error: st.error ? ydsT("errorPrefix") + st.error : ""
+    });
   }
   if (st.mode === "awaiting_paid_confirmation") {
-    return `等待确认：点击上方按钮后，本视频才会使用 ${providerName(st.requestedProvider)} API。未确认前使用免费 Google Translate。`;
+    return ydsT("statusAwaiting", { name: providerName(st.requestedProvider) });
   }
   if (st.mode === "need_api_key") {
-    return `${providerName(st.requestedProvider)} 需要 API Key。未填写前会使用免费 Google Translate。`;
+    return ydsT("statusNeedKey", { name: providerName(st.requestedProvider) });
   }
   if (st.mode === "error") {
-    return `${providerName(st.requestedProvider || st.provider)} 翻译失败：${st.error || "未知错误"}`;
+    return ydsT("statusError", {
+      name: providerName(st.requestedProvider || st.provider),
+      error: st.error || ydsT("unknownError")
+    });
   }
   if (info.nativeCaptionText) {
-    return "已检测到 YouTube 字幕。选择翻译源并填写 key 后，页面会自动重新翻译；当前还没有完成翻译。";
+    return ydsT("statusDetected");
   }
-  return "请先点开 YouTube 播放器右下角的 CC 按钮开启原生字幕，扩展会自动翻译并叠加第二种语言。";
+  return ydsT("statusTurnOnCC");
 }
 
 async function refreshStatusSoon(delay = 900) {
@@ -416,6 +433,7 @@ function startStatusPolling() {
 }
 
 async function init() {
+  localizeStaticDom();
   const stored = (await chrome.storage.sync.get(["ydsSettings"])).ydsSettings || {};
   const settings = { ...DEFAULTS, ...stored };
 
@@ -448,7 +466,7 @@ async function init() {
   $("enabled").addEventListener("change", (e) => save({ enabled: e.target.checked }));
   $("lang").addEventListener("change", async (e) => {
     await save({ secondLang: e.target.value });
-    $("status").textContent = "已切换目标语言。页面正在重新检测 native 字幕或翻译…";
+    $("status").textContent = ydsT("statusLangSwitched");
     refreshStatusSeries();
     startStatusPolling();
   });
@@ -465,23 +483,21 @@ async function init() {
     await save({ translationProvider: e.target.value });
     const cur = (await chrome.storage.sync.get(["ydsSettings"])).ydsSettings || {};
     applyProviderUI({ ...DEFAULTS, ...cur });
-    $("status").textContent = `已切换为 ${providerName(e.target.value)}。未点击确认前不会调用付费 API。`;
+    $("status").textContent = ydsT("statusProviderSwitched", { name: providerName(e.target.value) });
     refreshStatusSeries();
     startStatusPolling();
   });
   $("askPaidApi").addEventListener("change", async (e) => {
     await save({ paidApiAskEachVideo: e.target.checked });
-    $("status").textContent = e.target.checked
-      ? "已开启：每次打开视频会自动询问是否使用付费 API。"
-      : "已关闭：付费 API 只会在你点击“本视频使用所选 API 翻译”后调用。";
+    $("status").textContent = e.target.checked ? ydsT("askOn") : ydsT("askOff");
   });
   $("usePaidApi").addEventListener("click", async () => {
     if (!activeTabId) return;
     const provider = $("provider").value;
-    $("status").textContent = `正在为本视频启动 ${providerName(provider)} API 翻译…`;
+    $("status").textContent = ydsT("statusStartingPaid", { name: providerName(provider) });
     const resp = await sendContent(activeTabId, { type: "YDS_APPROVE_PAID_API" });
     if (!resp?.ok) {
-      $("status").textContent = resp?.error || "无法启动付费 API。请确认页面已打开字幕并刷新后重试。";
+      $("status").textContent = resp?.error || ydsT("statusPaidFailed");
       return;
     }
     refreshStatusSeries();
@@ -494,8 +510,8 @@ async function init() {
       updateApiKeyState(!!value);
       setApiKeyEditing(false);
       $("status").textContent = value
-        ? `已保存 ${providerName($("provider").value)} API Key。需要点击上方按钮才会调用。`
-        : `${providerName($("provider").value)} API Key 已清空。`;
+        ? ydsT("keySaved", { name: providerName($("provider").value) })
+        : ydsT("keyCleared", { name: providerName($("provider").value) });
     } else {
       setApiKeyEditing(true);
     }
@@ -508,7 +524,7 @@ async function init() {
     if (apiKeySaveTimer) clearTimeout(apiKeySaveTimer);
     apiKeySaveTimer = setTimeout(async () => {
       await saveApiKey($("provider").value, e.target.value.trim());
-      $("status").textContent = `已保存 ${providerName($("provider").value)} API Key。需要点击上方按钮才会调用。`;
+      $("status").textContent = ydsT("keySaved", { name: providerName($("provider").value) });
     }, 500);
   });
   $("apiKey").addEventListener("change", async (e) => {
@@ -517,11 +533,11 @@ async function init() {
     await saveApiKey($("provider").value, value);
     updateApiKeyState(!!value);
     $("status").textContent = value
-      ? `已保存 ${providerName($("provider").value)} API Key。需要点击上方按钮才会调用。`
-      : `${providerName($("provider").value)} API Key 已清空。`;
+      ? ydsT("keySaved", { name: providerName($("provider").value) })
+      : ydsT("keyCleared", { name: providerName($("provider").value) });
   });
 }
 
 init().catch((err) => {
-  $("status").textContent = "初始化失败：" + (err?.message || err);
+  $("status").textContent = ydsT("initFailed") + (err?.message || err);
 });

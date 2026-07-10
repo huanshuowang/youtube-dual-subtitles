@@ -19,7 +19,7 @@
     videoId: null,
     settings: {
       enabled: true,
-      secondLang: "zh-Hans",
+      secondLang: ydsDefaultSecondLang(),
       bottomOffset: 22,     // % from the bottom of the video
       fontSize: 22,
       color: "#ffffff",
@@ -306,7 +306,8 @@
         cueCount: preCuesTranslated.length,
         totalCount: cues.length,
         translatedCount: preCuesTranslated.length,
-        error: "用户取消了付费 API，本视频使用免费 Google Translate"
+        declined: true,
+        error: ydsT("paidDeclined")
       });
     });
   }
@@ -323,11 +324,11 @@
     root.className = "yds-paid-api-confirm";
     root.innerHTML = `
       <div class="yds-paid-api-card">
-        <div class="yds-paid-api-title">是否为本视频使用 ${name} API？</div>
-        <div class="yds-paid-api-body">这会调用你的 ${name} Key，可能产生费用。取消后本视频会继续使用免费的 Google Translate。</div>
+        <div class="yds-paid-api-title">${ydsT("paidPromptTitle", { name })}</div>
+        <div class="yds-paid-api-body">${ydsT("paidPromptBody", { name })}</div>
         <div class="yds-paid-api-actions">
-          <button type="button" class="yds-paid-api-free">用免费 Google</button>
-          <button type="button" class="yds-paid-api-use">使用 ${name} API</button>
+          <button type="button" class="yds-paid-api-free">${ydsT("paidPromptFree")}</button>
+          <button type="button" class="yds-paid-api-use">${ydsT("paidPromptUse", { name })}</button>
         </div>
       </div>`;
     root.querySelector(".yds-paid-api-use").addEventListener("click", onApprove);
@@ -338,8 +339,8 @@
 
   function approvePaidApiForCurrentVideo(reason = "popup approval") {
     const provider = selectedTranslationProvider();
-    if (!isPaidProvider(provider)) return { ok: false, error: "当前翻译源不是付费 API" };
-    if (!sourceCuesCache || preCuesNative.length) return { ok: false, error: "当前视频没有可翻译的源字幕，或已经使用 native 字幕" };
+    if (!isPaidProvider(provider)) return { ok: false, error: ydsT("notPaidProvider") };
+    if (!sourceCuesCache || preCuesNative.length) return { ok: false, error: ydsT("noSourceCues") };
     const apiKey = (STATE.settings.apiKeys || {})[provider];
     if (!apiKey) return { ok: false, error: `${providerDisplayName(provider)} API key not set` };
 
@@ -1139,7 +1140,7 @@ Translations:`;
     const handle = document.createElement("div");
     handle.className = "yds-drag-handle";
     handle.textContent = "↕";
-    handle.title = "上下拖动调整字幕位置";
+    handle.title = ydsT("dragHint");
     overlayEl.appendChild(handle);
 
     let dragging = false;
