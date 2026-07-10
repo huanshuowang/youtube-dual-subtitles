@@ -22,7 +22,14 @@ cp icons/icon16.png icons/icon48.png icons/icon128.png "${STAGE_DIR}/icons/"
 cp -R _locales "${STAGE_DIR}/_locales"
 
 ( cd dist && zip -r -q "${OUT_NAME}.zip" "${OUT_NAME}" )
+
+# Chrome Web Store upload: same files, but manifest.json must sit at the
+# zip root (no wrapping folder).
+UPLOAD_ZIP="dist/${OUT_NAME}-upload.zip"
+( cd "${STAGE_DIR}" && zip -r -q "../${OUT_NAME}-upload.zip" . )
 rm -rf "${STAGE_DIR}"
 
 SIZE=$(du -h "${ZIP_PATH}" | cut -f1)
 echo "Wrote ${ZIP_PATH} (${SIZE})"
+SIZE=$(du -h "${UPLOAD_ZIP}" | cut -f1)
+echo "Wrote ${UPLOAD_ZIP} (${SIZE})"

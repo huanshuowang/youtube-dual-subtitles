@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YouTube Dual Subtitles 1.2.0 — 让 YouTube 同时显示两种语言字幕</title>
+  <title>YouTube Dual Subtitles 1.3.0 — 让 YouTube 同时显示两种语言字幕</title>
   <meta name="description" content="在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。" />
   <link rel="icon" type="image/png" href="icons/icon48.png" />
 
@@ -316,11 +316,11 @@
   <header class="hero">
     <div class="container">
       <h1 data-en="Dual subtitles for YouTube">YouTube 也能双语字幕</h1>
-      <div class="version-pill">v1.2.0</div>
+      <div class="version-pill">v1.3.0</div>
       <p class="sub" data-en="Show two subtitle languages on YouTube. Use native captions or free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek translation.">
         在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。
       </p>
-      <a class="cta" href="youtube-dual-subtitles-1.2.0.zip" download data-en="Download extension ⬇">
+      <a class="cta" href="youtube-dual-subtitles-1.3.0.zip" download data-en="Download extension ⬇">
         下载扩展 ⬇
       </a>
       <a class="cta-secondary" href="#install" data-en="How to install">如何安装</a>
@@ -388,9 +388,9 @@
           <div class="num">1</div>
           <div class="body">
             <h3 data-en="Download the extension">下载扩展</h3>
-            <p data-en='Click the <a href="youtube-dual-subtitles-1.2.0.zip" download>Download extension</a> button at the top — you&apos;ll get a .zip file. Unzip it somewhere you&apos;ll remember (like your Documents folder).'>
+            <p data-en='Click the <a href="youtube-dual-subtitles-1.3.0.zip" download>Download extension</a> button at the top — you&apos;ll get a .zip file. Unzip it somewhere you&apos;ll remember (like your Documents folder).'>
               点击顶部
-              <a href="youtube-dual-subtitles-1.2.0.zip" download>下载扩展</a>
+              <a href="youtube-dual-subtitles-1.3.0.zip" download>下载扩展</a>
               按钮，得到一个 .zip 文件。解压到你喜欢的位置（比如"文档"文件夹）。
             </p>
           </div>
@@ -430,23 +430,23 @@
 
   <section id="changelog">
     <div class="container">
-      <h2 data-en="What's new in 1.2.0">1.2.0 更新日志</h2>
-      <p class="section-desc" data-en="Higher-quality translation options with safer API controls.">新增高质量翻译源，同时避免不必要的 API 花费。</p>
+      <h2 data-en="What's new in 1.3.0">1.3.0 更新日志</h2>
+      <p class="section-desc" data-en="The extension UI now speaks your language.">插件界面现在会说你的语言。</p>
       <div class="features">
         <div class="feature">
+          <div class="icon">🌐</div>
+          <h3 data-en="Auto-localized interface">界面自动本地化</h3>
+          <p data-en="The popup, on-page prompts, and store description now follow your browser's language automatically — Chinese for zh-* browsers, English for everyone else. No language setting needed.">插件弹窗、页面内提示和商店描述会自动跟随浏览器语言：中文浏览器显示中文，其他显示英文，无需任何设置。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🎯</div>
+          <h3 data-en="Smarter default language">更聪明的默认语言</h3>
+          <p data-en="The default second-subtitle language is now inferred from your browser language (e.g. Traditional Chinese, Japanese, Portuguese) instead of always starting in Simplified Chinese.">默认第二字幕语言不再固定为简体中文，而是根据浏览器语言自动推断（如繁体中文、日语、葡萄牙语等）。</p>
+        </div>
+        <div class="feature">
           <div class="icon">🤖</div>
-          <h3 data-en="Optional AI translation">可选AI翻译</h3>
-          <p data-en="Optional paid translation providers are now supported, alongside native captions and free Google Translate.">在视频自带字幕和 Google 免费翻译之外，新增 Claude / OpenAI / Gemini / DeepSeek 可选翻译源。</p>
-        </div>
-        <div class="feature">
-          <div class="icon">🛡️</div>
-          <h3 data-en="Manual API confirmation">付费 API 手动确认</h3>
-          <p data-en="Paid APIs are never called automatically by default. Use the popup button to enable the selected API for the current video, or turn on per-video prompts.">默认不会自动调用付费 API。需要在插件弹窗里点击“本视频使用所选 API 翻译”，也可以开启每个视频自动询问。</p>
-        </div>
-        <div class="feature">
-          <div class="icon">✅</div>
-          <h3 data-en="Clear provider status">翻译源状态可视化</h3>
-          <p data-en="The popup now shows whether subtitles are native, Google-translated, or produced by a selected API, including live translation progress.">弹窗会显示当前字幕来自自带字幕、Google 免费翻译还是所选 API，并显示实时翻译进度。</p>
+          <h3 data-en="From 1.2.0: optional AI translation">1.2.0 起：可选 AI 翻译</h3>
+          <p data-en="Claude / OpenAI / Gemini / DeepSeek remain available alongside native captions and free Google Translate, with manual confirmation before any paid API call.">继续支持 Claude / OpenAI / Gemini / DeepSeek 翻译源，付费 API 仍需手动确认后才会调用。</p>
         </div>
       </div>
     </div>
@@ -486,8 +486,8 @@
     (function () {
       const STORAGE_KEY = "yds-site-lang";
       const TITLES = {
-        zh: "YouTube Dual Subtitles 1.2.0 — 让 YouTube 同时显示两种语言字幕",
-        en: "YouTube Dual Subtitles 1.2.0 — See two languages on YouTube at once"
+        zh: "YouTube Dual Subtitles 1.3.0 — 让 YouTube 同时显示两种语言字幕",
+        en: "YouTube Dual Subtitles 1.3.0 — See two languages on YouTube at once"
       };
       const DESCRIPTIONS = {
         zh: "在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。",
