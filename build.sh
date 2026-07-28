@@ -5,7 +5,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-OUT_NAME="youtube-dual-subtitles"
+OUT_NAME="happysubs"
 STAGE_DIR="dist/${OUT_NAME}"
 ZIP_PATH="dist/${OUT_NAME}.zip"
 
