@@ -24,7 +24,7 @@
 
   const MESSAGES = {
     en: {
-      appTitle: "Dual Subtitles",
+      appTitle: "HappySubs",
       enable: "Enable",
       secondLanguage: "2nd language",
       translationSource: "Translator",
@@ -95,7 +95,7 @@
       dragHint: "Drag up/down to move the subtitles"
     },
     zh: {
-      appTitle: "双语字幕 · Dual Subtitles",
+      appTitle: "HappySubs",
       enable: "启用",
       secondLanguage: "第二语言",
       translationSource: "翻译源",
