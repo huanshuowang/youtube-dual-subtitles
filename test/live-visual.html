@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS live layout — visual</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; background: #fff; }
+  /* A still frame's worth of video to judge the boxes against. */
+  #player { position: relative; width: 700px; height: 394px;
+            background: linear-gradient(135deg, #7a6a58, #cbb89b 60%, #8a7c66); }
+  pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+
+<h1>Live layout — does a wrapped line read as one box?</h1>
+<pre id="measure">measuring…</pre>
+<div id="player"><video id="v"></video></div>
+
+<script>
+// Built by the real content.js through the real live path, so what is on screen
+// is what ships — not a hand-copied approximation of it.
+const STORE = { ydsSettings: { enabled: true, secondLang: "zh-Hans", uiLang: "auto",
+                               bottomOffset: 14, fontSize: 22, color: "#ffffff",
+                               background: "rgba(0,0,0,0.65)", translationProvider: "google",
+                               captionWidth: 60, translationOnly: false, apiKeys: {} } };
+const messageHandlers = [];
+const sockets = [];
+window.WebSocket = class { static OPEN = 1;
+  constructor(u){ this.url=u; this.readyState=1; this.sent=[]; sockets.push(this);
+                  setTimeout(()=>this.onopen&&this.onopen(),10); }
+  send(d){ this.sent.push(d); } close(){ this.readyState=3; this.onclose&&this.onclose(); }
+  say(t,f){ this.onmessage&&this.onmessage({data:JSON.stringify({text:t,final:f})}); } };
+window.WebSocket.OPEN = 1;
+window.AudioContext = class {
+  constructor(o){ this.sampleRate=(o&&o.sampleRate)||48000; this.destination={}; }
+  resume(){return Promise.resolve();} close(){return Promise.resolve();}
+  createMediaStreamSource(){return{connect(){},disconnect(){}};}
+  createScriptProcessor(){return{connect(){},disconnect(){},onaudioprocess:null};}
+  createGain(){return{gain:{value:1},connect(){},disconnect(){}};} };
+HTMLMediaElement.prototype.captureStream = function(){ return {}; };
+window.chrome = {
+  runtime:{ getURL:f=>"/"+f, onMessage:{addListener:fn=>messageHandlers.push(fn)}, lastError:null },
+  i18n:{ getUILanguage:()=>"zh-CN" },
+  storage:{ sync:{ get:(k,cb)=>setTimeout(()=>cb(JSON.parse(JSON.stringify(STORE))),0),
+                   set:(o,cb)=>{Object.assign(STORE,o);cb&&cb();} },
+            onChanged:{addListener(){}} }
+};
+window.__send = (msg) => new Promise(res => {
+  for (const fn of messageHandlers) { if (fn(msg,{},r=>res(r)) === true) return; }
+  res(null);
+});
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script src="../live.js"></script>
+<script>
+window.YDS_PLATFORMS = { detect:()=>"mock", create:(id,ctx)=>({
+  id:"mock", requiresCcForTracks:false, looksLikeVideoPage:()=>true,
+  getVideoId:()=>"v1", getVideoEl:()=>document.getElementById("v"),
+  getContainer:()=>document.getElementById("player"), isCcOn:()=>true,
+  nativeLines:()=>[], nativeCaptionWidth:()=>0,
+  observeTarget:()=>document.getElementById("player"),
+  start(){}, requestTrack(){}, forgetLoadedCues(){}, reset(){}
+})};
+window.requestAnimationFrame = (fn)=>setTimeout(()=>fn(performance.now()),16);
+</script>
+<script src="../content.js"></script>
+<script>
+(async () => {
+  await new Promise(r=>setTimeout(r,600));
+  await window.__send({type:"YDS_LIVE_START"});
+  await new Promise(r=>setTimeout(r,300));
+  // The line from the screenshot: long enough in English to wrap onto two lines.
+  sockets[0].say("All right jaws was a global phenomenon And it was universal pro", false);
+  await new Promise(r=>setTimeout(r,3500));
+
+  // Measure the vertical gap between the two English line boxes.
+  const o = document.querySelector("#yt-dual-sub-overlay");
+  const src = o.querySelector(".yds-source");
+  const rects = [...src.getClientRects()];
+  const gaps = [];
+  for (let i = 1; i < rects.length; i++) gaps.push(+(rects[i].top - rects[i-1].bottom).toFixed(2));
+  const wraps = [...o.querySelectorAll(".yds-wrap")];
+  const boxes = wraps.map(w => w.getClientRects().length);
+  const clips = [...o.querySelectorAll(".yds-clip")].filter(c => c.style.display !== "none");
+  const between = clips.length > 1
+    ? +(clips[1].getBoundingClientRect().top - clips[0].getBoundingClientRect().bottom).toFixed(2)
+    : null;
+  // Now push more than two lines' worth and check the clip still holds at two,
+  // dropping the oldest off the top rather than growing.
+  const twoLineHeight = o.querySelector(".yds-source").closest(".yds-clip").getBoundingClientRect().height;
+  sockets[0].say("All right jaws was a global phenomenon And it was universal produced and it kept going and going well past two lines of text", false);
+  await new Promise(r=>setTimeout(r,600));
+  const clip = o.querySelector(".yds-source").closest(".yds-clip");
+  const manyLineHeight = clip.getBoundingClientRect().height;
+  const visibleLines = Math.round(manyLineHeight / (parseFloat(getComputedStyle(clip).lineHeight) || 1));
+
+  document.getElementById("measure").textContent =
+    `background boxes per language: ${JSON.stringify(boxes)}   (want 1 each — a wrapped\n` +
+    `   sentence should read as one block, not one box per line)\n` +
+    `text line spacing inside that box: ${JSON.stringify(gaps)}px   (ordinary leading;\n` +
+    `   no longer a stripe of video, since the background is continuous)\n` +
+    `gap between the two languages: ${between}px\n` +
+    `clip height at 2 lines: ${Math.round(twoLineHeight)}px\n` +
+    `clip height with far more text: ${Math.round(manyLineHeight)}px  (~${visibleLines} lines — must not grow)`;
+})();
+</script>

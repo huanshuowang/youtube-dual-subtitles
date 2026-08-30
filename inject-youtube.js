@@ -115,9 +115,18 @@
     document.body.classList.add("yds-suppressing-native");
 
     try {
+      // With captions closed the module isn't loaded, and setOption alone is a
+      // no-op: measured on a live player, it flips the CC button on but fires
+      // no timedtext request at all. loadModule first and the request goes out
+      // (as an XHR), paused or playing.
+      if (ccWasOff) {
+        try { player.loadModule("captions"); } catch {}
+      }
       player.setOption("captions", "track", { languageCode: langCode });
       // Give YouTube time to fetch the new track (our interceptor catches it).
-      await new Promise(r => setTimeout(r, 900));
+      // A little longer when we had to load the module from cold, so we don't
+      // unload it out from under an in-flight request.
+      await new Promise(r => setTimeout(r, ccWasOff ? 1600 : 900));
     } catch {}
 
     // Restore whatever the user had before.

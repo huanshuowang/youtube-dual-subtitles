@@ -1,6 +1,10 @@
-// Shared i18n for popup and content script. UI language follows the
-// browser's UI language automatically: any zh-* locale gets Chinese,
-// everything else gets English. No user-facing language setting.
+// Shared i18n for the popup, the options page and the content script.
+//
+// By default the UI language follows the browser: any zh-* locale gets Chinese,
+// everything else gets English. The options page can override that, so callers
+// pass the stored preference to ydsSetUiLang() once their settings have loaded.
+// ydsT() is always read lazily, so switching the language later just works —
+// re-render and every string comes back in the new language.
 
 (() => {
   function rawUiLang() {
@@ -12,7 +16,18 @@
     return "";
   }
 
-  const YDS_LANG = /^zh/i.test(rawUiLang()) ? "zh" : "en";
+  function autoLang() {
+    return /^zh/i.test(rawUiLang()) ? "zh" : "en";
+  }
+
+  let YDS_LANG = autoLang();
+
+  // pref: "auto" | "zh" | "en" (anything unrecognised falls back to auto).
+  function ydsSetUiLang(pref) {
+    YDS_LANG = (pref === "zh" || pref === "en") ? pref : autoLang();
+    globalThis.ydsUiLang = YDS_LANG;
+    return YDS_LANG;
+  }
 
   // Default second-subtitle language guessed from the browser UI language,
   // used before the user picks one themselves.
@@ -45,7 +60,38 @@
       usePaidApiBtn: "Translate this video with {name} API",
       usePaidApiBtnGeneric: "Translate this video with the selected API",
       askEachVideo: "Ask on every video whether to use the paid API",
+      tabTranslate: "Translate",
+      translateScope: "Works on YouTube, Vimeo and Bilibili — including Vimeo players embedded in other sites.",
+      liveScope: "Works on all three platforms; mainly for Bilibili, where most videos have no subtitle track. Needs the local recogniser installed.",
+      tabLive: "Live transcribe",
+      liveStart: "Start live transcription",
+      liveStop: "Stop live transcription",
+      liveIdle: "For videos with no subtitles at all. Taps the video's audio and captions it as it plays, using a recogniser running on this computer — the audio never leaves your machine.",
+      liveConnecting: "Connecting to the local recogniser…",
+      liveListening: "Listening. Captions appear as people speak.",
+      statusLiveRunning: "Live transcription is running — these captions come from the recogniser on your machine, not from a subtitle track.",
+      liveUnavailable: "No local recogniser found on port 8765. Install and start it, then press start again — see the setup guide.",
+      liveNoVideo: "No video found on this page.",
+      liveCaptureFailed: "Could not tap this video's audio. Press play first, then start transcription.",
+      liveSetupLink: "Setup guide →",
+      liveHasTrack: "This video also has a subtitle track, which is more accurate than a recogniser. Live captions are showing because you asked for them; stop them and the track comes straight back.",
+      optionsTitle: "HappySubs settings",
+      interfaceSection: "Interface",
+      interfaceLanguage: "Panel language",
+      langAuto: "Follow the browser",
+      langZh: "中文",
+      langEn: "English",
+      langNote: "Applies to the popup, this page and the prompts drawn on the video.",
+      behaviourSection: "Default behaviour",
+      behaviourNote: "These are the same switches as in the popup — they are remembered across videos and browser restarts, so whatever you set here is how every video starts.",
+      openPopupNote: "Second language, translator, API keys and subtitle styling live in the toolbar popup.",
+      saved: "Saved",
+      translationOnly: "Translation only (no need to turn on captions)",
+      statusTranslationOnly: "Translation-only mode: the second language shows on its own, with the player's captions closed.",
+      statusTranslationOnlyNeedsCc: "Translation-only mode is on, but no subtitles have been picked up yet. Click CC once in the player, then turn it back off — the extension keeps the track and shows the translation on its own.",
       verticalPosition: "Vertical position",
+      captionWidth: "Subtitle width",
+      captionWidthNote: "Applies only when there is no original caption line to match: live transcription, and translation-only mode. Turn it down when the picture is pillarboxed, so the text stays over the image.",
       fontSizePx: "Font size (px)",
       textColor: "Text color",
       bgOpacity: "Background opacity",
@@ -58,8 +104,8 @@
       groupCommon: "Common",
       groupAll: "All languages",
 
-      statusNoTab: "Open a video on www.youtube.com to use this extension.",
-      statusNoComm: "Can't reach the page. Refresh the YouTube tab and try again.",
+      statusNoTab: "Open a video on YouTube, Vimeo or Bilibili to use this extension.",
+      statusNoComm: "Can't reach this page yet. If you clicked through from a listing page, open the video in a new tab or refresh the {platform} tab.",
       statusNative: "Now showing this video's native {lang} subtitles (no translation API used).",
       statusNativeFallbackLang: "target-language",
       statusDone: "Done: translated by {name}, {count} subtitle lines loaded.",
@@ -72,8 +118,11 @@
       statusNeedKey: "{name} needs an API Key. Free Google Translate is used until you add one.",
       statusError: "{name} translation failed: {error}",
       unknownError: "unknown error",
-      statusDetected: "YouTube subtitles detected. Pick a translator and add a key; the page will retranslate automatically. Translation hasn't finished yet.",
+      statusDetected: "{platform} subtitles detected. Pick a translator and add a key; the page will retranslate automatically. Translation hasn't finished yet.",
       statusTurnOnCC: "Turn on captions with the CC button in the YouTube player first; the extension will translate and overlay a second language automatically.",
+      statusVimeoReading: "Reading Vimeo's subtitle track. Hit CC in the player if you also want the original on screen.",
+      statusBilibiliReading: "Reading Bilibili's subtitle track. Turn on subtitles in the player if you also want the original on screen.",
+      statusBilibiliNoTrack: "This video has no subtitle track. Bilibili only lists tracks for signed-in viewers — if you are signed in, the video genuinely has none, and live transcription is the way to caption it.",
 
       statusLangSwitched: "Target language changed. The page is re-checking native subtitles or retranslating…",
       statusProviderSwitched: "Switched to {name}. The paid API won't be called until you confirm.",
@@ -116,7 +165,38 @@
       usePaidApiBtn: "本视频使用 {name} API 翻译",
       usePaidApiBtnGeneric: "本视频使用所选 API 翻译",
       askEachVideo: "每次打开视频自动询问是否使用付费 API",
+      tabTranslate: "直接翻译",
+      translateScope: "支持 YouTube、Vimeo、B站，包括嵌在其他网站里的 Vimeo 播放器。",
+      liveScope: "三个平台都能用；主要是给 B站——那里大部分视频没有字幕轨。需要先装本地识别服务。",
+      tabLive: "实时听译",
+      liveStart: "开启实时听译",
+      liveStop: "关闭实时听译",
+      liveIdle: "给完全没有字幕的视频用。抓取视频音频，边播边转成字幕，识别在你自己电脑上跑——音频不出本机。",
+      liveConnecting: "正在连接本地识别服务…",
+      liveListening: "已连接，说话时会出字幕。",
+      statusLiveRunning: "实时听译进行中——画面上的字幕来自本机识别，不是视频自带的字幕轨。",
+      liveUnavailable: "8765 端口上没找到本地识别服务。装好并启动后再点开启——见安装说明。",
+      liveNoVideo: "这个页面上没找到视频。",
+      liveCaptureFailed: "抓不到这个视频的音频。先点一下播放，再开启听译。",
+      liveSetupLink: "安装说明 →",
+      liveHasTrack: "这个视频本身有字幕轨，比识别准。现在显示听译是因为你主动开了它；关掉就立刻切回字幕轨。",
+      optionsTitle: "HappySubs 设置",
+      interfaceSection: "界面",
+      interfaceLanguage: "面板语言",
+      langAuto: "跟随浏览器",
+      langZh: "中文",
+      langEn: "English",
+      langNote: "作用于插件弹窗、本页面，以及视频上弹出的提示。",
+      behaviourSection: "默认行为",
+      behaviourNote: "这两个开关和弹窗里是同一个——设置会跨视频、跨重启保留，所以在这里设成什么，每个视频打开时就是什么。",
+      openPopupNote: "第二语言、翻译源、API Key 和字幕样式在工具栏弹窗里设置。",
+      saved: "已保存",
+      translationOnly: "仅显示翻译字幕（不用开原生字幕）",
+      statusTranslationOnly: "仅翻译模式：不开播放器字幕也会单独显示第二语言。",
+      statusTranslationOnlyNeedsCc: "仅翻译模式已开启，但还没取到字幕。在播放器里点一下 CC 再关掉即可——扩展会留着这份字幕，之后单独显示译文。",
       verticalPosition: "垂直位置",
+      captionWidth: "字幕宽度",
+      captionWidthNote: "只在没有原生字幕可对齐时生效：实时听译、以及仅翻译模式。画面左右有黑边时调小，字幕就只落在画面里。",
       fontSizePx: "字号 (px)",
       textColor: "文字颜色",
       bgOpacity: "背景透明度",
@@ -129,8 +209,8 @@
       groupCommon: "常用",
       groupAll: "全部语言",
 
-      statusNoTab: "打开 www.youtube.com 上的视频页面即可使用。",
-      statusNoComm: "无法与页面通信。请刷新 YouTube 页面后再试。",
+      statusNoTab: "打开 YouTube、Vimeo 或 B 站上的视频页面即可使用。",
+      statusNoComm: "还连不上这个页面。如果你是从列表页点进来的，刷新一下 {platform} 页面（或在新标签页打开视频）即可。",
       statusNative: "当前使用：视频自带 {lang} 字幕（未调用翻译 API）。",
       statusNativeFallbackLang: "目标语言",
       statusDone: "已完成：{name} 翻译，已加载 {count} 条字幕。",
@@ -143,8 +223,11 @@
       statusNeedKey: "{name} 需要 API Key。未填写前会使用免费 Google Translate。",
       statusError: "{name} 翻译失败：{error}",
       unknownError: "未知错误",
-      statusDetected: "已检测到 YouTube 字幕。选择翻译源并填写 key 后，页面会自动重新翻译；当前还没有完成翻译。",
+      statusDetected: "已检测到 {platform} 字幕。选择翻译源并填写 key 后，页面会自动重新翻译；当前还没有完成翻译。",
       statusTurnOnCC: "请先点开 YouTube 播放器右下角的 CC 按钮开启原生字幕，扩展会自动翻译并叠加第二种语言。",
+      statusVimeoReading: "正在读取 Vimeo 字幕轨。想同时看到原文，点一下播放器的 CC 就行。",
+      statusBilibiliReading: "正在读取 B 站字幕轨。想同时看到原文，在播放器里打开字幕即可。",
+      statusBilibiliNoTrack: "这个视频没有字幕轨。B 站只对登录用户返回字幕列表——如果你已登录，那就是真的没有，用实时听译来出字幕。",
 
       statusLangSwitched: "已切换目标语言。页面正在重新检测 native 字幕或翻译…",
       statusProviderSwitched: "已切换为 {name}。未点击确认前不会调用付费 API。",
@@ -179,5 +262,6 @@
 
   globalThis.ydsT = ydsT;
   globalThis.ydsUiLang = YDS_LANG;
+  globalThis.ydsSetUiLang = ydsSetUiLang;
   globalThis.ydsDefaultSecondLang = ydsDefaultSecondLang;
 })();

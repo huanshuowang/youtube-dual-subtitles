@@ -1,0 +1,129 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS source-switch harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  #fake-player { position: relative; width: 480px; height: 270px; background: #222; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<h1>YDS source-switch harness</h1>
+<pre id="out">running…</pre>
+
+<div id="fake-player">
+  <video id="v"></video>
+  <button id="cc" aria-pressed="true"></button>
+</div>
+
+<script>
+// Target is Chinese and no source track is Chinese, so everything goes down the
+// translate path. Which track a rendered line came from is decided by cue
+// TIMING, not by the words: a marker word is not dependable, "QQQ" comes back
+// from Google Translate as "QQ". Tracks are given different time coverage
+// instead, and the clock is parked where only one of them has anything to say.
+const STORE = { ydsSettings: { enabled: true, secondLang: "zh-Hans", uiLang: "auto",
+                               bottomOffset: 20, fontSize: 22, color: "#ffffff",
+                               background: "rgba(0,0,0,0.6)", translationProvider: "google",
+                               translationOnly: false, apiKeys: {} } };
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener() {} }, lastError: null },
+  i18n: { getUILanguage: () => "en-US" },
+  storage: {
+    sync: { get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+            set: (o, cb) => { Object.assign(STORE, o); cb && cb(); } },
+    onChanged: { addListener() {} }
+  }
+};
+window.__now = 7;
+window.__asked = [];
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script>
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    window.__ctx = ctx;
+    setTimeout(() => ctx.onTrackList([
+      { languageCode: "en", kind: "",    name: "English (United States)" },
+      { languageCode: "en", kind: "asr", name: "English (auto-generated)" },
+      { languageCode: "th", kind: "",    name: "Thai" }
+    ]), 0);
+    return {
+      id: "mock", requiresCcForTracks: true,
+      looksLikeVideoPage: () => true,
+      getVideoId: () => "mock-1",
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("fake-player"),
+      isCcOn: () => true,
+      nativeLines: () => [],
+      nativeCaptionWidth: () => 0,
+      observeTarget: () => document.getElementById("fake-player"),
+      start() {}, forgetLoadedCues() {}, reset() {},
+      requestTrack(t) { window.__asked.push(`${t.languageCode}${t.kind === "asr" ? "(asr)" : ""}`); }
+    };
+  }
+};
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+const shown = () => {
+  const o = document.querySelector("#yt-dual-sub-overlay");
+  if (!o || o.style.display === "none") return "";
+  const t = o.querySelector(".yds-text");
+  return t ? t.textContent : "";
+};
+
+(async () => {
+  Object.defineProperty(document.getElementById("v"), "currentTime",
+    { get: () => window.__now, configurable: true });
+  await settle(500);
+
+  // --- 1. The player hands over machine transcription. A human track for the
+  //        same language exists, so the extension should go fetch it.
+  //        This ASR track says nothing after t=5.
+  window.__ctx.ingest({ cues: [{ start: 0, end: 5, text: "rough machine transcript" }],
+                        lang: "en", isAsr: true, key: "en-asr-1" });
+  await settle(3000);
+  check("machine transcript triggers a request for the human track",
+        window.__asked.includes("en"), JSON.stringify(window.__asked));
+  check("at t=7 the machine track has nothing to show", shown() === "", JSON.stringify(shown()));
+
+  // --- 2. The human track arrives, and it does cover t=7.
+  window.__ctx.ingest({ cues: [{ start: 0, end: 5, text: "the first human line" },
+                               { start: 5, end: 10, text: "the second human line" }],
+                        lang: "en", isAsr: false, key: "en-human" });
+  await settle(3500);
+  const human = shown();
+  check("translation now comes from the human track", human !== "", JSON.stringify(human));
+
+  // --- 3. The player restores the viewer's ASR selection and re-fetches it.
+  //        That must not drag the source back down.
+  window.__ctx.ingest({ cues: [{ start: 0, end: 5, text: "rough machine transcript again" }],
+                        lang: "en", isAsr: true, key: "en-asr-2" });
+  await settle(2500);
+  check("a later machine transcript does not replace it", shown() === human,
+        JSON.stringify({ was: human, now: shown() }));
+
+  // --- 4. The viewer switches the CC menu to Thai. A different language is an
+  //        explicit choice, so it must win — the no-downgrade rule is only
+  //        about machine-vs-human inside one language.
+  window.__now = 2;
+  window.__ctx.ingest({ cues: [{ start: 0, end: 10, text: "แมวสีดำนั่งอยู่บนโต๊ะ" }],
+                        lang: "th", isAsr: false, key: "th-track" });
+  await settle(3500);
+  const thai = shown();
+  check("switching to another language re-translates from it",
+        thai !== "" && thai !== human, JSON.stringify({ english: human, thai }));
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "\n        " + r.d : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

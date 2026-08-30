@@ -1,13 +1,19 @@
 {
   "manifest_version": 3,
   "name": "__MSG_appName__",
-  "version": "1.3.1",
+  "version": "2.0.0",
   "description": "__MSG_appDesc__",
   "default_locale": "en",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
-    "*://*.youtube.com/*",
-    "*://www.youtube.com/api/timedtext*",
+    "*://www.youtube.com/*",
+    "*://vimeo.com/*",
+    "*://player.vimeo.com/*",
+    "https://www.bilibili.com/*",
+    "https://captions.vimeo.com/*",
+    "https://api.bilibili.com/*",
     "https://translate.googleapis.com/*",
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
@@ -30,17 +36,76 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://www.youtube.com/*"],
-      "js": ["i18n.js", "content.js"],
-      "css": ["overlay.css"],
+      "matches": [
+        "*://www.youtube.com/*"
+      ],
+      "js": [
+        "i18n.js",
+        "platform.js",
+        "live.js",
+        "content.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://vimeo.com/*",
+        "*://player.vimeo.com/*"
+      ],
+      "js": [
+        "i18n.js",
+        "platform.js",
+        "live.js",
+        "content.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://www.bilibili.com/*"
+      ],
+      "js": [
+        "i18n.js",
+        "platform.js",
+        "live.js",
+        "content.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["inject.js"],
-      "matches": ["*://www.youtube.com/*"]
+      "resources": [
+        "inject-youtube.js"
+      ],
+      "matches": [
+        "*://www.youtube.com/*"
+      ]
+    },
+    {
+      "resources": [
+        "inject-vimeo.js"
+      ],
+      "matches": [
+        "*://vimeo.com/*",
+        "*://player.vimeo.com/*"
+      ]
     }
-  ]
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
 }

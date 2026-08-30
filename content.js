@@ -1,21 +1,29 @@
-// Content script.
+// Content script. Platform-independent half of the extension.
 //
-// Primary path — timedtext interception:
-//   inject.js patches window.fetch / XMLHttpRequest in the page's main world.
-//   Whenever YouTube's own player fetches captions, we get the raw response
-//   (JSON3 or SRV3), parse into cues, batch-translate the whole track upfront,
-//   and render translated cues synchronously with video.currentTime.
+// Everything that knows about a specific site lives in platform.js, which
+// loads first and hands us an adapter. The adapter finds the <video>, finds
+// the overlay anchor, and pushes caption cues at us; from there the flow is
+// the same on every platform.
+//
+// Primary path — whole-track preload:
+//   The adapter delivers a full track's cues at once (YouTube by intercepting
+//   the player's own /api/timedtext response, Vimeo by fetching the .vtt).
+//   We merge cues that were split mid-clause, batch-translate the entire track
+//   upfront, and render synchronously against video.currentTime — no lag.
 //
 // Fallback path — DOM observation:
-//   If we never get an intercepted response (e.g., YouTube fetched captions
-//   before our patch installed, or format changed), we observe rendered
-//   caption text and translate on the fly with a small debounce.
+//   If cues never arrive (format change, expired URL, captions rendered from a
+//   source we can't read), we watch the rendered caption text and translate on
+//   the fly with a small debounce.
 
 (() => {
   const DEBUG = true;
   const log = (...a) => { if (DEBUG) console.log("[YDS]", ...a); };
 
+  let P = null;   // platform adapter, created in boot()
+
   const STATE = {
+    platform: null,
     videoId: null,
     settings: {
       enabled: true,
@@ -27,6 +35,14 @@
       // Translation provider: "google" | "claude" | "openai" | "gemini" | "deepseek".
       // Google is free/anonymous; the others need the user's own API key.
       translationProvider: "google",
+      uiLang: "auto",          // panel language: "auto" | "zh" | "en"
+      // Off by default the overlay rides along with the player's own caption
+      // strip: no native captions, no second language. Turning this on detaches
+      // it, so the translation shows on its own with the player's CC closed.
+      // Share of the player the overlay may use, as a percentage. Only applies
+      // when there is no native caption line to match — see matchNativeCaptionWidth.
+      captionWidth: 60,
+      translationOnly: false,
       paidApiAskEachVideo: false,
       apiKeys: {}           // { claude?: string, openai?: string, gemini?: string, deepseek?: string }
     }
@@ -63,9 +79,15 @@
   const paidApiDecisions = new Map(); // key -> "approved" | "declined"
   let paidApiPromptEl = null;
 
-  // Track list from ytInitialPlayerResponse (published by inject.js).
+  // Caption tracks the platform says exist on this video.
   let availableTracks = [];       // [{languageCode, kind, name}]
-  let nativeTargetRequested = false; // don't ask the player to swap tracks more than once per video
+  let trackRequested = false; // don't ask the player for a track more than once per video
+  let sourceRequestAttempts = 0; // translation-only asks are retried once, then we stop
+  // Which track the text we are translating came from, so a machine transcript
+  // can be upgraded to a human one but never the other way round.
+  let sourceLang = "";
+  let sourceIsAsr = false;
+  let betterSourceRequested = false;
 
   // Aborts any in-flight LLM/Google Translate calls when we get a better
   // source of cues (native track), a video change, or a settings change.
@@ -86,14 +108,20 @@
   let translateTimer = null;
   let pendingText = "";
 
-  // ---------- inject page-world script ----------
-  function injectPageScript() {
-    if (document.getElementById("yds-inject")) return;
-    const s = document.createElement("script");
-    s.id = "yds-inject";
-    s.src = chrome.runtime.getURL("inject.js");
-    (document.head || document.documentElement).appendChild(s);
-    s.onload = () => s.remove();
+  // Adapters start before settings finish loading — on YouTube the fetch patch
+  // has to be in place at document_start or we miss the caption request. Park
+  // anything that arrives in that window and replay it once we know the user's
+  // target language, so we never translate into the default one by accident.
+  let settingsLoaded = false;
+  const pendingTrackLists = [];
+  const pendingIngests = [];
+
+  function drainPending() {
+    settingsLoaded = true;
+    const lists = pendingTrackLists.splice(0);
+    const ingests = pendingIngests.splice(0);
+    for (const list of lists) handleTrackList(list);
+    for (const payload of ingests) ingestCues(payload);
   }
 
   // ---------- settings ----------
@@ -110,10 +138,16 @@
     if (area !== "sync" || !changes.ydsSettings) return;
     const prev = { ...STATE.settings };
     Object.assign(STATE.settings, changes.ydsSettings.newValue || {});
+    if (typeof ydsSetUiLang === "function") ydsSetUiLang(STATE.settings.uiLang);
     applyOverlayStyles();
+    // Width is decided at render time, so nudge the current line to re-measure.
+    if (prev.captionWidth !== STATE.settings.captionWidth && currentRenderedText) {
+      renderOverlay(currentRenderedText);
+    }
 
     const langChanged = prev.secondLang !== STATE.settings.secondLang;
     const providerChanged = prev.translationProvider !== STATE.settings.translationProvider;
+    const translationOnlyChanged = prev.translationOnly !== STATE.settings.translationOnly;
     const keysChanged = JSON.stringify(prev.apiKeys || {}) !== JSON.stringify(STATE.settings.apiKeys || {});
 
     if (langChanged) {
@@ -131,10 +165,13 @@
       cacheKeyLang = STATE.settings.secondLang;
       preCuesNative = [];
       preCuesTranslated = [];
-      nativeTargetRequested = false;
+      trackRequested = false;
       currentRenderedText = "";
       lastNativeText = "";
-      maybeRequestNativeTrack();
+      // The new target language may be a track we already pulled and filed as
+      // source text, so let the adapter fetch it again.
+      if (P && P.forgetLoadedCues) P.forgetLoadedCues();
+      maybeRequestTrack();
     }
 
     // Any change to translation config: retranslate from cached source if we
@@ -149,15 +186,22 @@
       maybeAskForPaidApi(sourceCuesCache, tl, "settings changed");
     }
 
+    // Switching translation-only on with the player's captions closed means we
+    // now need a track the player was never going to fetch — ask for it.
+    if (translationOnlyChanged && STATE.settings.translationOnly && !sourceCuesCache && !preCuesNative.length) {
+      trackRequested = false;
+      maybeRequestTrack();
+    }
+
     if (!STATE.settings.enabled) renderOverlay("");
   });
 
   // ---------- track list handler ----------
-  window.addEventListener("YDS_TRACK_LIST", (e) => {
-    const detail = e.detail || {};
-    availableTracks = detail.tracks || [];
+  function handleTrackList(tracks) {
+    if (!settingsLoaded) { pendingTrackLists.push(tracks || []); return; }
+    availableTracks = tracks || [];
     log("track list:", availableTracks.map(t => `${t.languageCode}${t.kind === "asr" ? "(asr)" : ""}`).join(", ") || "(none)");
-    maybeRequestNativeTrack();
+    maybeRequestTrack();
 
     const provider = chooseSourceTranslationProvider();
     if (provider !== "google" && sourceCuesCache && !preCuesNative.length) {
@@ -166,37 +210,88 @@
     } else if (sourceCuesCache && !preCuesNative.length) {
       maybeAskForPaidApi(sourceCuesCache, toGoogleLang(STATE.settings.secondLang), "native unavailable after track list");
     }
-  });
+  }
 
   function isCcOn() {
     // Returns true / false / null (player not ready yet).
-    const btn = document.querySelector(".ytp-subtitles-button");
-    if (!btn) return null;
-    return btn.getAttribute("aria-pressed") === "true";
+    return P ? P.isCcOn() : null;
   }
 
-  function maybeRequestNativeTrack() {
-    if (nativeTargetRequested) return;
+  // Best track to translate FROM when the player would never fetch one on its
+  // own — translation-only mode, where there is no viewer choice to respect.
+  //
+  // Order: human-authored in the original language, then any human-authored,
+  // then machine transcription. Human text beats a machine transcript even at
+  // the cost of relaying through a third language, but among human tracks the
+  // original language wins because it costs nothing.
+  //
+  // The machine track is what tells us the original language: players only
+  // auto-generate captions for the language actually being spoken, so its
+  // language code is the audio's, even when we go on to translate from
+  // something else.
+  function pickSourceTrack() {
+    const human = availableTracks.filter(t => t.kind !== "asr");
+    const machine = availableTracks.find(t => t.kind === "asr") || null;
+    const originalLang = machine ? machine.languageCode : "";
+
+    if (originalLang) {
+      const humanOriginal = human.find(t => langMatches(originalLang, t.languageCode));
+      if (humanOriginal) return humanOriginal;
+    }
+    return human[0] || machine || availableTracks[0] || null;
+  }
+
+  function maybeRequestTrack() {
+    if (trackRequested) return;
+    if (!P) return;
     if (!STATE.settings.enabled || !STATE.settings.secondLang) return;
     if (!availableTracks.length) return;
-    // Don't do the swap dance while the user has CC off — it would briefly
-    // flash captions on/off. Wait until the user turns CC on themselves;
-    // we'll retry from the intercept handler when that happens.
+
     const cc = isCcOn();
-    if (cc !== true) {
-      log(`CC is ${cc === false ? "off" : "unknown"}, deferring native track swap`);
+    const target = getNativeTargetTrack();
+
+    if (target) {
+      // On YouTube, pulling another language means asking the player to swap
+      // tracks, which flashes captions on and off if CC is currently closed —
+      // so wait until the user turns CC on themselves and retry then. Vimeo
+      // hands us a URL per track, so there is nothing to wait for. In
+      // translation-only mode we go ahead regardless: the swap is hidden, and
+      // the player's captions are put back the way we found them.
+      if (P.requiresCcForTracks && cc !== true && !STATE.settings.translationOnly) {
+        log(`CC is ${cc === false ? "off" : "unknown"}, deferring track request`);
+        return;
+      }
+      trackRequested = true;
+      log(`requesting native target track: ${target.languageCode} (${target.name})`);
+      P.requestTrack(target);
       return;
     }
-    const match = getNativeTargetTrack();
-    if (!match) {
-      log(`no native track for ${STATE.settings.secondLang}, will translate`);
-      return;
+
+    log(`no native track for ${STATE.settings.secondLang}, will translate`);
+
+    // Nothing in the target language, so we have to translate something. With
+    // the player's captions closed it never fetches a track by itself, so in
+    // translation-only mode ask for one outright — otherwise there is nothing
+    // on screen at all.
+    if (STATE.settings.translationOnly && P.requiresCcForTracks && cc !== true && !sourceCuesCache) {
+      const source = pickSourceTrack();
+      if (source) {
+        trackRequested = true;
+        sourceRequestAttempts++;
+        log(`translation-only: requesting source track ${source.languageCode} with CC closed (attempt ${sourceRequestAttempts})`);
+        P.requestTrack(source);
+        // The player can be too early in its own startup to answer. Give it one
+        // more go before we leave the viewer staring at nothing.
+        if (sourceRequestAttempts < 2) {
+          setTimeout(() => {
+            if (!sourceCuesCache && !preCuesNative.length && STATE.settings.translationOnly) {
+              trackRequested = false;
+              maybeRequestTrack();
+            }
+          }, 5000);
+        }
+      }
     }
-    nativeTargetRequested = true;
-    log(`requesting native track: ${match.languageCode} (${match.name})`);
-    window.dispatchEvent(new CustomEvent("YDS_LOAD_NATIVE_TRACK", {
-      detail: { languageCode: match.languageCode }
-    }));
   }
 
   function langMatches(target, candidate) {
@@ -247,8 +342,8 @@
     const provider = selectedTranslationProvider();
     if (provider === "google") return "google";
 
-    // Paid providers are only allowed after the YouTube track list proves that
-    // no native target-language track exists. Until then, use free Google as
+    // Paid providers are only allowed after the platform's track list proves
+    // that no native target-language track exists. Until then, use free Google as
     // a disposable warm cache while the native-track request races.
     if (!availableTracks.length || getNativeTargetTrack()) return "google";
     return paidApiDecisions.get(paidDecisionKey(provider)) === "approved" ? provider : "google";
@@ -352,44 +447,32 @@
     return { ok: true, provider };
   }
 
-  // ---------- intercept handler ----------
-  window.addEventListener("YDS_TIMEDTEXT", async (e) => {
+  // ---------- cue ingestion ----------
+  //
+  // Every platform funnels into here: one track's worth of cues, plus what
+  // language they are and whether they are already the language the user asked
+  // for. Called by the adapter via ctx.ingest.
+  function ingestCues(payload) {
+    if (!settingsLoaded) { pendingIngests.push(payload); return; }
+    const { cues: rawCues, lang: trackLang = "", isAsr = false, key = "" } = payload || {};
     if (!STATE.settings.enabled || !STATE.settings.secondLang) return;
-    const detail = e.detail || {};
-    const url = detail.url || "";
-    const text = detail.text || "";
+    if (!rawCues || !rawCues.length) return;
 
-    // Skip YouTube's own auto-translated tracks; we prefer either a real
-    // native track OR our own Google Translate output.
-    if (/[?&]tlang=/.test(url)) {
-      log("intercept: skipping tlang track");
-      return;
-    }
+    // The adapter passes a hint, but recompute against the settings we have
+    // now — the payload may have been parked before those settings loaded.
+    const isNativeTarget = trackLang
+      ? (!isAsr && langMatches(STATE.settings.secondLang, trackLang))
+      : !!payload.isNativeTarget;
 
-    // YouTube prefetches captions for autoplay/recommended/hover-preview videos.
-    // Only accept the track whose v= matches the video the user is watching.
-    const vMatch = /[?&]v=([^&]+)/.exec(url);
-    const trackVideoId = vMatch ? vMatch[1] : null;
-    const pageVideoIdMatch = /[?&]v=([^&]+)/.exec(location.search);
-    const pageVideoId = pageVideoIdMatch ? pageVideoIdMatch[1] : null;
-    if (trackVideoId && pageVideoId && trackVideoId !== pageVideoId) {
-      log("intercept: skipping track for other video", trackVideoId, "current", pageVideoId);
-      return;
-    }
-
-    // Extract this track's language + kind from the URL.
-    const langMatch = /[?&]lang=([^&]+)/.exec(url);
-    const trackLang = langMatch ? decodeURIComponent(langMatch[1]) : "";
-    const isAsr = /[?&]kind=asr/.test(url);
-    const isNativeTarget = !isAsr && trackLang && langMatches(STATE.settings.secondLang, trackLang);
-
-    const rawCues = parseCaptions(text);
-    if (!rawCues.length) return;
-
-    // Dedupe: same track can be fetched multiple times (e.g., after our swap dance).
-    const key = `${trackLang}|${isAsr ? "asr" : "sub"}|${rawCues.length}|${rawCues[0].start.toFixed(3)}|${rawCues[rawCues.length-1].end.toFixed(3)}`;
-    if (seenTrackKeys.has(key)) return;
-    seenTrackKeys.add(key);
+    // Dedupe: the same track can arrive more than once (YouTube re-fetches it
+    // after a track swap; Vimeo re-publishes its config on a fresh signature).
+    // One exception — a track we already saw as *source* text becomes worth
+    // re-reading once the user switches their target language to it.
+    const dedupeKey = key
+      || `${trackLang}|${isAsr ? "asr" : "sub"}|${rawCues.length}|${rawCues[0].start.toFixed(3)}|${rawCues[rawCues.length - 1].end.toFixed(3)}`;
+    const nowWantedAsNative = isNativeTarget && !preCuesNative.length;
+    if (seenTrackKeys.has(dedupeKey) && !nowWantedAsNative) return;
+    seenTrackKeys.add(dedupeKey);
 
     if (isNativeTarget) {
       // Native second-language track — use directly, no merge / no translate.
@@ -405,62 +488,63 @@
         translatedCount: preCuesNative.length,
         error: ""
       });
-      log(`intercept: NATIVE ${trackLang} track, ${preCuesNative.length} cues (no translation needed)`);
+      log(`ingest: NATIVE ${trackLang} track, ${preCuesNative.length} cues (no translation needed)`);
+      return;
+    }
+
+    // Don't fall back down. Once we're translating a human-authored track, a
+    // machine transcript of the same language arriving later (the player
+    // re-fetching what the viewer actually has selected, say) must not replace
+    // it — that would silently undo the upgrade below.
+    if (sourceCuesCache && !sourceIsAsr && isAsr && langMatches(sourceLang || trackLang, trackLang)) {
+      log(`ingest: keeping the human-authored ${sourceLang} source, ignoring the machine one`);
       return;
     }
 
     // Source-language track → merge broken cues, translate to target lang.
     const sourceCues = mergeSplitCues(rawCues);
     sourceCuesCache = sourceCues;
-    log(`intercept: ${rawCues.length} raw → ${sourceCues.length} merged source cues (${trackLang || "?"})`);
+    sourceLang = trackLang;
+    sourceIsAsr = isAsr;
+    log(`ingest: ${rawCues.length} raw → ${sourceCues.length} merged source cues (${trackLang || "?"}${isAsr ? ", asr" : ""})`);
+
+    // The player handed us machine transcription, but the video also carries a
+    // human-authored track in the same language — ask for that instead. Same
+    // words on screen either way, better text to translate from. Staying inside
+    // one language is the point: swapping to a different language would leave
+    // the caption strip and the translation talking about different things.
+    if (isAsr && !betterSourceRequested && P && trackLang) {
+      const better = availableTracks.find(t => t.kind !== "asr" && langMatches(trackLang, t.languageCode));
+      if (better) {
+        betterSourceRequested = true;
+        log(`ingest: upgrading source from ${trackLang}(asr) to the human ${better.languageCode} track`);
+        P.requestTrack(better);
+        // Carry on translating the machine text meanwhile, so the viewer isn't
+        // left with a blank overlay while the better track is on its way.
+      }
+    }
 
     // If a native target track has already been loaded, skip translating — the
     // native one is higher quality. We still cache source in case the user
     // later switches to a language with no native track available.
     if (preCuesNative.length) {
-      log("intercept: already have native cues, skipping translation");
+      log("ingest: already have native cues, skipping translation");
       return;
     }
 
     const tl = toGoogleLang(STATE.settings.secondLang);
-    // Kick off translation, but also try to grab a native track since seeing
-    // an intercept means CC just turned on — if we deferred earlier, retry now.
-    maybeRequestNativeTrack();
-    startCuesTranslation(sourceCues, tl, chooseSourceTranslationProvider(), "source captions intercepted");
-    maybeAskForPaidApi(sourceCues, tl, "source captions intercepted");
-  });
-
-  // ---------- caption parsers ----------
-  function parseCaptions(raw) {
-    const trimmed = (raw || "").trim();
-    if (!trimmed) return [];
-    if (trimmed[0] === "{") {
-      try { return parseJson3(JSON.parse(trimmed)); }
-      catch { return []; }
-    }
-    if (trimmed[0] === "<") return parseSrv3(trimmed);
-    return [];
+    // Kick off translation, but also retry the native-track request: on YouTube,
+    // cues arriving means CC just turned on, so a request we deferred earlier
+    // can go through now.
+    maybeRequestTrack();
+    startCuesTranslation(sourceCues, tl, chooseSourceTranslationProvider(), "source captions loaded");
+    maybeAskForPaidApi(sourceCues, tl, "source captions loaded");
   }
 
-  function parseJson3(data) {
-    const cues = [];
-    const events = data?.events || [];
-    for (const ev of events) {
-      if (!ev.segs) continue;
-      const dur = (ev.dDurationMs || 0) / 1000;
-      if (dur <= 0) continue;
-      const start = (ev.tStartMs || 0) / 1000;
-      const text = ev.segs.map(s => s.utf8 || "").join("").replace(/\s+/g, " ").trim();
-      if (!text) continue;
-      cues.push({ start, end: start + dur, text });
-    }
-    cues.sort((a, b) => a.start - b.start);
-    return coalesceIdenticalCues(cues);
-  }
-
+  // ---------- cue post-processing ----------
   function coalesceIdenticalCues(cues) {
-    // YouTube sometimes emits the same caption text as multiple overlapping
-    // events (continuation / shadow cues). Merge back-to-back cues with
+    // Players emit the same caption text as multiple overlapping events
+    // (continuation / shadow cues). Merge back-to-back cues with
     // identical text into a single longer cue so we don't render the same
     // line twice at overlapping timestamps.
     if (cues.length < 2) return cues;
@@ -479,7 +563,7 @@
 
   function mergeSplitCues(cues) {
     // Only merge across CLEARLY mid-clause splits so the Chinese overlay
-    // stays as short as the English YouTube displays at any given moment.
+    // stays as short as the source line the player shows at any given moment.
     const TERMINATOR = /[.!?…。！？,，;；:：]["'”’)\]]*\s*$/;
     const MAX_MERGED_DURATION = 4;   // seconds
     const MAX_MERGED_CHARS = 70;     // of the *source* text
@@ -525,24 +609,6 @@
       .trim();
   }
 
-  function parseSrv3(xml) {
-    const cues = [];
-    try {
-      const doc = new DOMParser().parseFromString(xml, "text/xml");
-      const ps = doc.querySelectorAll("p");
-      ps.forEach(p => {
-        const t = parseInt(p.getAttribute("t") || "0", 10);
-        const d = parseInt(p.getAttribute("d") || "0", 10);
-        if (d <= 0) return;
-        const text = (p.textContent || "").replace(/\s+/g, " ").trim();
-        if (!text) return;
-        cues.push({ start: t / 1000, end: (t + d) / 1000, text });
-      });
-      cues.sort((a, b) => a.start - b.start);
-    } catch {}
-    return coalesceIdenticalCues(cues);
-  }
-
   // ---------- Translation providers ----------
   //
   // Public entry points: translateText / translateBatch — they dispatch to
@@ -550,7 +616,7 @@
   // Google if the LLM call fails.
 
   function toGoogleLang(code) {
-    // Google Translate uses zh-CN / zh-TW etc., YouTube uses zh-Hans / zh-Hant.
+    // Google Translate uses zh-CN / zh-TW etc., the players use zh-Hans / zh-Hant.
     const map = { "zh-hans": "zh-CN", "zh-hant": "zh-TW", "iw": "he", "jw": "jv" };
     const k = (code || "").toLowerCase();
     return map[k] || code;
@@ -919,6 +985,223 @@ Translations:`;
     }
   }
 
+
+  // ---------- live transcription ----------
+  //
+  // A caption source with no timeline. Text arrives as "the sentence being
+  // spoken right now", refreshed several times a second, then finalised. We
+  // keep the last finished sentence plus the one in progress, and translate
+  // both — the finished one once, the in-progress one on a throttle so a
+  // sentence being revised mid-flight doesn't fire a request per keystroke.
+  //
+  // Translation here always goes through Google, never a paid provider, even
+  // when one is configured. A partial retranslates roughly once a second for as
+  // long as someone is talking; billing that to an LLM API would be a nasty
+  // surprise on an hour-long video. Track translation, which runs once over a
+  // fixed set of lines, is where the paid providers earn their keep.
+  const LIVE_DISPLAY_CHARS = 90;    // trim the visible line; CSS clips the rest
+  const LIVE_HIDE_MS = 4000;        // fade out after this much silence
+  const LIVE_PAUSE_HOLD_MS = 8000;  // …but hold it longer once the video is paused
+  const LIVE_PARTIAL_MS = 900;      // retranslate the sentence in progress this often
+
+  const live = {
+    active: false,
+    status: "stopped",
+    detail: "",
+    textBuf: "",         // last finished sentence, with a trailing space
+    partial: "",         // sentence in progress
+    transBuf: "",        // its translation
+    transPartial: "",
+    hideTimer: null,
+    partialTimer: null,
+    partialLastAt: 0,
+    pendingPartial: "",
+    partialToken: 0,
+    finalChain: Promise.resolve(),   // keeps finals in order
+    gen: 0,              // bumped on stop / seek / video change to void in-flight work
+    cache: new Map()
+  };
+
+  // Keep the tail, but don't start mid-word: if there's a space near the cut,
+  // start after it instead.
+  function tailTrim(text, max) {
+    if (text.length <= max) return text;
+    const tail = text.slice(-max);
+    const sp = tail.search(/\s/);
+    return sp >= 0 && sp < 24 ? tail.slice(sp + 1) : tail;
+  }
+
+  let liveSourceShown = false;
+
+  function liveRender() {
+    if (!live.active) return;
+    const heard = (live.textBuf + live.partial).trim();
+    const translated = (live.transBuf + live.transPartial).trim();
+    liveSourceShown = !!heard;
+    renderSourceLine(heard ? tailTrim(heard, LIVE_DISPLAY_CHARS) : "");
+    renderOverlay(translated ? tailTrim(translated, LIVE_DISPLAY_CHARS) : "");
+    if (heard || translated) {
+      if (overlayEl) overlayEl.classList.add("yds-live-visible");
+      clearTimeout(live.hideTimer);
+      live.hideTimer = setTimeout(() => {
+        if (overlayEl) overlayEl.classList.remove("yds-live-visible");
+      }, LIVE_HIDE_MS);
+    }
+  }
+
+  async function liveTranslate(text) {
+    const key = `${STATE.settings.secondLang}\n${text}`;
+    if (live.cache.has(key)) return live.cache.get(key);
+    const out = await translateTextGoogle(text, toGoogleLang(STATE.settings.secondLang));
+    const clean = stripUnwantedPunctuation(out || "");
+    if (live.cache.size > 500) live.cache.clear();
+    live.cache.set(key, clean);
+    return clean;
+  }
+
+  // Finals go through a promise chain so two of them can't land out of order.
+  function queueFinalTranslation(text) {
+    if (!STATE.settings.secondLang) return;
+    live.transPartial = "";
+    live.pendingPartial = "";
+    live.partialToken++;                 // void any partial translation in flight
+    clearTimeout(live.partialTimer);
+    live.partialTimer = null;
+    const gen = live.gen;
+    live.finalChain = live.finalChain.then(async () => {
+      try {
+        const out = await liveTranslate(text);
+        if (gen !== live.gen) return;
+        live.transBuf = out + " ";
+        liveRender();
+      } catch {}
+    });
+  }
+
+  // Throttle, NOT debounce. While someone is speaking the recogniser refreshes
+  // the sentence several times a second; a debounce timer would keep being
+  // pushed back and the translation would not appear until they paused. The
+  // first partial opens a window; later ones only update what gets sent when
+  // that window closes.
+  function queuePartialTranslation(text) {
+    if (!STATE.settings.secondLang) return;
+    live.pendingPartial = text;
+    if (live.partialTimer) return;       // a window is already queued
+    const wait = Math.max(0, LIVE_PARTIAL_MS - (Date.now() - live.partialLastAt));
+    live.partialTimer = setTimeout(async () => {
+      live.partialTimer = null;
+      live.partialLastAt = Date.now();
+      const current = live.pendingPartial;
+      if (!current) return;              // the sentence finalised meanwhile
+      const token = ++live.partialToken;
+      const gen = live.gen;
+      try {
+        const out = await liveTranslate(current);
+        if (token !== live.partialToken || gen !== live.gen) return;
+        live.transPartial = out;
+        liveRender();
+      } catch {}
+    }, wait);
+  }
+
+  function liveOnText(text, isFinal) {
+    if (!live.active) return;
+    if (isFinal) {
+      // Keep only the newest finished sentence, or the line grows without end.
+      live.textBuf = text + " ";
+      live.partial = "";
+      queueFinalTranslation(text);
+    } else {
+      live.partial = text;
+      queuePartialTranslation(text);
+    }
+    liveRender();
+  }
+
+  function liveClearText() {
+    live.textBuf = live.partial = live.transBuf = live.transPartial = "";
+    live.pendingPartial = "";
+    clearTimeout(live.partialTimer);
+    live.partialTimer = null;
+    live.partialToken++;
+  }
+
+  function liveOnStatus(status, detail) {
+    live.status = status;
+    live.detail = detail || "";
+    log(`live: ${status}${detail ? " — " + detail : ""}`);
+  }
+
+  async function startLive() {
+    if (!P) return { ok: false, error: "no-platform" };
+    if (live.active) return { ok: true };
+    const video = P.getVideoEl();
+    if (!video) return { ok: false, error: "no-video" };
+    const res = await window.YDS_LIVE.start(video, { onText: liveOnText, onStatus: liveOnStatus });
+    if (!res.ok) {
+      liveOnStatus("unavailable", res.detail || res.error);
+      return res;
+    }
+    live.active = true;
+    live.gen++;
+    applyOverlayStyles();
+    return { ok: true };
+  }
+
+  function stopLive() {
+    if (!live.active && live.status === "stopped") return { ok: true };
+    live.active = false;
+    live.gen++;
+    applyOverlayStyles();
+    // Force the render loop to repaint from the track rather than skip it as
+    // unchanged — the overlay currently holds live text, not currentRenderedText.
+    currentRenderedText = "";
+    clearTimeout(live.hideTimer);
+    clearTimeout(live.partialTimer);
+    liveClearText();
+    if (overlayEl) overlayEl.classList.remove("yds-live-visible");
+    window.YDS_LIVE.stop();
+    renderSourceLine("");
+    renderOverlay("");
+    return { ok: true };
+  }
+
+  // Pausing to read is the one moment a viewer wants the line to stay put.
+  //
+  // Subtitle tracks handle this by themselves: the timeline stops, so the cue
+  // under the playhead keeps rendering for as long as the video is paused.
+  // Live text has no timeline — it is only ever "the last thing heard" — so
+  // without this it fades on the ordinary silence timeout a few seconds after
+  // the audio stops, which is exactly when someone paused to read it.
+  function watchPlayback() {
+    const ours = (e) => e.target instanceof HTMLMediaElement
+                     && (!P || P.getVideoEl() === e.target);
+    const holdFor = (ms) => {
+      clearTimeout(live.hideTimer);
+      live.hideTimer = setTimeout(() => {
+        if (overlayEl) overlayEl.classList.remove("yds-live-visible");
+      }, ms);
+    };
+    document.addEventListener("pause", (e) => {
+      if (live.active && ours(e)) holdFor(LIVE_PAUSE_HOLD_MS);
+    }, true);
+    document.addEventListener("play", (e) => {
+      if (live.active && ours(e)) holdFor(LIVE_HIDE_MS);
+    }, true);
+  }
+
+  // A seek makes the recogniser's buffered audio meaningless.
+  function watchSeeks() {
+    document.addEventListener("seeking", (e) => {
+      if (!live.active) return;
+      if (!(e.target instanceof HTMLMediaElement)) return;
+      live.gen++;
+      liveClearText();
+      window.YDS_LIVE.reset();
+      liveRender();
+    }, true);
+  }
+
   // ---------- render loop (uses preCues if available) ----------
   function findCuesAt(cues, t) {
     // Return all cues active at time t, joined by newline. Dedupe by text so
@@ -938,17 +1221,50 @@ Translations:`;
     return active.join("\n");
   }
 
+  // Whether the overlay is allowed on screen at all right now.
+  //
+  // The default is to follow the player: the second language is meant to sit
+  // under the original, so closing the player's captions hides both. Users who
+  // only want the translation turn on translationOnly, which cuts that tie.
+  //
+  // A null from isCcOn() means we genuinely could not read the player's caption
+  // state, and we stay hidden. Showing on a maybe is the wrong default here —
+  // it puts a subtitle on screen the viewer never asked for, which is the one
+  // thing this setting exists to prevent. Both adapters have a second signal
+  // behind the button, so null should be rare; if it does happen the escape
+  // hatch is the translation-only switch.
+  function overlayAllowed() {
+    if (STATE.settings.translationOnly) return true;
+    return isCcOn() === true;
+  }
+
   function renderTick() {
-    const video = document.querySelector("video.html5-main-video");
+    const video = P ? P.getVideoEl() : null;
     // Native cues always win over translated ones.
     const cues = preCuesNative.length ? preCuesNative : preCuesTranslated;
-    if (video && STATE.settings.enabled && cues.length) {
+    // Live transcription owns the overlay whenever it is running, and drives it
+    // from its own events rather than from here.
+    //
+    // A subtitle track is the better source — it is exact where a recogniser
+    // guesses — so nothing ever switches to live on its own. But turning live on
+    // is an explicit act, and it used to be silently ignored on any video that
+    // had a track: the audio was captured, the socket connected, and the screen
+    // never changed. Whoever pressed the button gets what they asked for; the
+    // track is still in memory and comes straight back when they stop.
+    if (live.active) {
+      requestAnimationFrame(renderTick);
+      return;
+    }
+    if (video && STATE.settings.enabled && cues.length && overlayAllowed()) {
       const text = findCuesAt(cues, video.currentTime);
       const displayText = alignWithNativeLineBreaks(text);
       if (displayText !== currentRenderedText) {
         currentRenderedText = displayText;
         renderOverlay(displayText);
       }
+    } else if (currentRenderedText) {
+      currentRenderedText = "";
+      renderOverlay("");
     }
     requestAnimationFrame(renderTick);
   }
@@ -962,72 +1278,7 @@ Translations:`;
   }
 
   function currentNativeLines() {
-    const captionWindows = Array.from(document.querySelectorAll(".ytp-caption-window-container .caption-window"));
-    for (const win of captionWindows) {
-      const lineNodes = Array.from(win.querySelectorAll(".caption-visual-line, .ytp-caption-segment"));
-      if (!lineNodes.length) continue;
-      const rows = [];
-      for (const node of lineNodes) {
-        const text = (node.textContent || "").replace(/\s+/g, " ").trim();
-        const rect = node.getBoundingClientRect();
-        if (!text || !rect.width || !rect.height) continue;
-        const row = rows.find(r => Math.abs(r.top - rect.top) < 8);
-        if (row) {
-          row.parts.push({ text, left: rect.left });
-          row.top = Math.min(row.top, rect.top);
-        } else {
-          rows.push({ top: rect.top, parts: [{ text, left: rect.left }] });
-        }
-      }
-      const lines = rows
-        .sort((a, b) => a.top - b.top)
-        .map(r => r.parts.sort((a, b) => a.left - b.left).map(p => p.text).join(" ").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      if (lines.length > 1) return lines;
-    }
-
-    const visualLines = Array.from(document.querySelectorAll(".captions-text .caption-visual-line"))
-      .map(n => (n.textContent || "").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-    if (visualLines.length) return visualLines;
-
-    const segments = Array.from(document.querySelectorAll(".ytp-caption-segment"))
-      .map(n => ({ text: (n.textContent || "").trim(), rect: n.getBoundingClientRect() }))
-      .filter(s => s.text && s.rect.width && s.rect.height)
-      .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
-
-    if (segments.length) {
-      const rows = [];
-      for (const seg of segments) {
-        const row = rows.find(r => Math.abs(r.top - seg.rect.top) < 6);
-        if (row) {
-          row.parts.push(seg);
-        } else {
-          rows.push({ top: seg.rect.top, parts: [seg] });
-        }
-      }
-      return rows
-        .sort((a, b) => a.top - b.top)
-        .map(r => r.parts.sort((a, b) => a.rect.left - b.rect.left).map(p => p.text).join(" ").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-    }
-
-    const selectors = [
-      ".ytp-caption-window-container .caption-window",
-      ".ytp-caption-window-container"
-    ];
-    for (const sel of selectors) {
-      const nodes = document.querySelectorAll(sel);
-      if (nodes.length) {
-        const text = Array.from(nodes)
-          .map(n => n.textContent || "")
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (text) return [text];
-      }
-    }
-    return [];
+    return P ? P.nativeLines() : [];
   }
 
   function normalizeForLineMatch(text) {
@@ -1043,7 +1294,7 @@ Translations:`;
   }
 
   function attachCaptionObserver() {
-    const target = document.querySelector("#movie_player") || document.body;
+    const target = (P && P.observeTarget()) || document.body;
     if (!target) return;
     if (captionObserver) { try { captionObserver.disconnect(); } catch {} }
     captionObserver = new MutationObserver(() => pumpFromNative(false));
@@ -1054,7 +1305,7 @@ Translations:`;
   function scheduleAttach() {
     if (attachTimer) return;
     attachTimer = setInterval(() => {
-      if (document.querySelector("#movie_player")) {
+      if (P && P.observeTarget()) {
         clearInterval(attachTimer);
         attachTimer = null;
         attachCaptionObserver();
@@ -1114,8 +1365,7 @@ Translations:`;
 
   // ---------- overlay ----------
   function getVideoContainer() {
-    return document.querySelector("#movie_player")
-        || document.querySelector(".html5-video-container");
+    return P ? P.getContainer() : null;
   }
 
   function ensureOverlay() {
@@ -1126,96 +1376,191 @@ Translations:`;
     overlayEl = document.createElement("div");
     overlayEl.id = "yt-dual-sub-overlay";
     overlayEl.className = "yds-overlay";
-    const textEl = document.createElement("div");
-    textEl.className = "yds-text";
-    overlayEl.appendChild(textEl);
+    // Two lines, each wrapped in a clip. Normally only the lower one is used:
+    // the original is already on screen in the player's own caption strip and we
+    // sit under it. Live transcription has no strip to sit under — the
+    // recognised speech IS the original — so it fills the upper line too.
+    //
+    // The clip/wrap nesting only matters in live mode, where it pins the box to
+    // two lines and scrolls older text off the top. For a subtitle track the
+    // extra elements are inert.
+    const makeLine = (cls) => {
+      const clip = document.createElement("div");
+      clip.className = "yds-clip";
+      const wrap = document.createElement("div");
+      wrap.className = "yds-wrap";
+      const line = document.createElement("span");
+      line.className = `yds-line ${cls}`;
+      wrap.appendChild(line);
+      clip.appendChild(wrap);
+      overlayEl.appendChild(clip);
+      return line;
+    };
+    const sourceEl = makeLine("yds-source");
+    sourceEl.closest(".yds-clip").style.display = "none";
+    makeLine("yds-text");
     container.appendChild(overlayEl);
-    attachDragUI(container);
+    attachDragUI();
     applyOverlayStyles();
+    // A rebuild mid-drag (player swapped the container out from under us) would
+    // otherwise drop the dashed outline that shows the drag is live.
+    if (dragging) overlayEl.classList.add("yds-dragging");
     return overlayEl;
   }
 
-  function attachDragUI(container) {
-    // Handle: small draggable pill above the overlay.
-    const handle = document.createElement("div");
-    handle.className = "yds-drag-handle";
-    handle.textContent = "↕";
-    handle.title = ydsT("dragHint");
-    overlayEl.appendChild(handle);
+  // The whole drag interaction is one window-level capture-phase controller,
+  // installed once. Two Vimeo facts force this shape:
+  //
+  //   1. `.vp-target` is a full-bleed mouse-capture layer sitting *after*
+  //      `.vp-video-wrapper` under `.player`, so pointer events over the video
+  //      never reach the overlay's own container — a listener there sees
+  //      nothing and the handle would never appear.
+  //   2. The player toggles play/pause from a listener we can't outrank by
+  //      bubbling, so grabbing the handle also paused the video.
+  //
+  // Capture on window is the earliest point in the propagation path, so we get
+  // every event first and can keep the player out of the ones that are ours.
+  // nearOverlay() is pure geometry, so none of this is Vimeo-specific — it
+  // behaves the same on YouTube.
+  let dragging = false;
+  let dragWatcherInstalled = false;
+  let dragStartY = 0;
+  let dragStartOffset = 0;
+  let dragContainerH = 1;
+  let swallowNextClick = false;
 
-    let dragging = false;
-    let startY = 0;
-    let startOffset = 0;
-    let containerH = 1;
+  function nearOverlay(x, y) {
+    if (!overlayEl || !overlayEl.isConnected || overlayEl.style.display === "none") return false;
+    const b = overlayEl.getBoundingClientRect();
+    if (b.width === 0 || b.height === 0) return false;
+    // Expand hit area vertically so the small handle is easy to reach.
+    return x >= b.left - 30 && x <= b.right + 30 && y >= b.top - 34 && y <= b.bottom + 20;
+  }
 
-    function nearOverlay(x, y) {
-      if (!overlayEl.isConnected || overlayEl.style.display === "none") return false;
-      const b = overlayEl.getBoundingClientRect();
-      if (b.width === 0 || b.height === 0) return false;
-      // Expand hit area vertically so the small handle is easy to reach.
-      return x >= b.left - 30 && x <= b.right + 30 && y >= b.top - 34 && y <= b.bottom + 20;
-    }
+  function isDragHandle(e) {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains("yds-drag-handle")) return true;
+    // Fall back to geometry. A player can float a transparent capture layer
+    // above everything (Vimeo's .vp-target, YouTube's chrome), which makes
+    // e.target something else entirely even though the pointer is on our
+    // handle. Hit-testing by rect doesn't care what is painted on top.
+    const h = overlayEl && overlayEl.querySelector(".yds-drag-handle");
+    if (!h || !h.isConnected) return false;
+    const b = h.getBoundingClientRect();
+    if (!b.width || !b.height) return false;
+    return e.clientX >= b.left && e.clientX <= b.right
+        && e.clientY >= b.top && e.clientY <= b.bottom;
+  }
 
-    // Attach the mousemove listener to the container only once per container.
-    if (!container.__ydsDragMoveAttached) {
-      container.__ydsDragMoveAttached = true;
-      container.addEventListener("mousemove", (e) => {
-        if (dragging) return;
-        const h = overlayEl && overlayEl.querySelector(".yds-drag-handle");
-        if (!h) return;
-        h.classList.toggle("yds-drag-visible", nearOverlay(e.clientX, e.clientY));
-      });
-      container.addEventListener("mouseleave", () => {
-        if (dragging) return;
-        const h = overlayEl && overlayEl.querySelector(".yds-drag-handle");
-        if (h) h.classList.remove("yds-drag-visible");
-      });
-    }
+  function setHandleVisible(visible) {
+    const h = overlayEl && overlayEl.querySelector(".yds-drag-handle");
+    if (h) h.classList.toggle("yds-drag-visible", visible);
+  }
 
-    handle.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragging = true;
-      startY = e.clientY;
-      startOffset = Number(STATE.settings.bottomOffset) || 0;
-      containerH = container.getBoundingClientRect().height || 1;
-      overlayEl.classList.add("yds-dragging");
-      handle.classList.add("yds-drag-visible");
-      document.addEventListener("mousemove", onMove, true);
-      document.addEventListener("mouseup", onUp, true);
-    });
+  function ensureDragWatcher() {
+    if (dragWatcherInstalled) return;
+    dragWatcherInstalled = true;
 
-    function onMove(e) {
-      if (!dragging) return;
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) {
+        setHandleVisible(nearOverlay(e.clientX, e.clientY));
+        return;
+      }
+      // preventDefault stops text selection mid-drag. We deliberately do NOT
+      // stopPropagation here: starving every other mousemove listener on the
+      // page breaks player UI (control bars, hover states) for no gain — the
+      // click swallow below is what keeps the player from reacting.
       e.preventDefault();
       // Mouse moves DOWN in screen → subtitle should move DOWN (bottom % decreases).
-      const deltaPct = -((e.clientY - startY) / containerH) * 100;
-      const next = Math.max(0, Math.min(95, startOffset + deltaPct));
-      STATE.settings.bottomOffset = next;
+      const deltaPct = -((e.clientY - dragStartY) / dragContainerH) * 100;
+      STATE.settings.bottomOffset = Math.max(0, Math.min(95, dragStartOffset + deltaPct));
       applyOverlayStyles();
-    }
+    }, true);
 
-    function onUp() {
+    window.addEventListener("mousedown", (e) => {
+      if (!isDragHandle(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const container = getVideoContainer();
+      dragging = true;
+      dragStartY = e.clientY;
+      dragStartOffset = Number(STATE.settings.bottomOffset) || 0;
+      dragContainerH = (container && container.getBoundingClientRect().height) || 1;
+      if (overlayEl) overlayEl.classList.add("yds-dragging");
+      setHandleVisible(true);
+    }, true);
+
+    window.addEventListener("mouseup", (e) => {
       if (!dragging) return;
+      e.stopPropagation();
       dragging = false;
-      overlayEl.classList.remove("yds-dragging");
-      document.removeEventListener("mousemove", onMove, true);
-      document.removeEventListener("mouseup", onUp, true);
+      // The click generated by this mouseup can land anywhere, including off
+      // the handle — swallow that one too so it doesn't reach the player.
+      swallowNextClick = true;
+      if (overlayEl) overlayEl.classList.remove("yds-dragging");
       // Persist the rounded value.
       const val = Math.round(Number(STATE.settings.bottomOffset) || 0);
       chrome.storage.sync.get(["ydsSettings"], (r) => {
         const merged = { ...(r && r.ydsSettings ? r.ydsSettings : {}), bottomOffset: val };
         chrome.storage.sync.set({ ydsSettings: merged });
       });
+    }, true);
+
+    for (const type of ["pointerdown", "pointerup"]) {
+      window.addEventListener(type, (e) => {
+        // stopPropagation only — preventDefault() on pointerdown would suppress
+        // the compatibility mousedown that starts the drag.
+        if (isDragHandle(e) || dragging) e.stopPropagation();
+      }, true);
     }
+
+    for (const type of ["click", "dblclick"]) {
+      window.addEventListener(type, (e) => {
+        if (!isDragHandle(e) && !swallowNextClick) return;
+        swallowNextClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+      }, true);
+    }
+
+    // Deliberately no "mouseleave" listener: it does not bubble, but a capture
+    // listener on window still fires for every element the pointer exits, so
+    // it hid the handle constantly on dense player DOMs. mousemove above
+    // already hides the handle whenever the pointer isn't near the overlay;
+    // this only covers the pointer leaving the window entirely.
+    document.addEventListener("mouseout", (e) => {
+      if (!dragging && !e.relatedTarget) setHandleVisible(false);
+    });
+  }
+
+  function attachDragUI() {
+    // Handle: small draggable pill above the overlay. All of its behaviour
+    // lives in the window-level watcher above.
+    const handle = document.createElement("div");
+    handle.className = "yds-drag-handle";
+    handle.textContent = "↕";
+    handle.title = ydsT("dragHint");
+    overlayEl.appendChild(handle);
+    ensureDragWatcher();
   }
 
   function applyOverlayStyles() {
     if (!overlayEl) return;
     const s = STATE.settings;
     overlayEl.style.color = s.color;
-    overlayEl.style.background = s.background;
     overlayEl.style.fontSize = `${s.fontSize}px`;
+    // In live mode the background belongs to the text, not to the box, and the
+    // width is fixed rather than measured — both handed to CSS as variables.
+    overlayEl.classList.toggle("yds-live", live.active);
+    if (live.active) {
+      const pct = Math.max(20, Math.min(100, Number(s.captionWidth) || 60));
+      overlayEl.style.setProperty("--yds-live-width", `${pct}%`);
+      overlayEl.style.setProperty("--yds-live-bg", s.background);
+      overlayEl.style.background = "";
+      overlayEl.style.width = "";
+    } else {
+      overlayEl.style.background = s.background;
+    }
     const offset = Math.max(0, Math.min(95, Number(s.bottomOffset) || 0));
     overlayEl.style.bottom = `${offset}%`;
     overlayEl.style.top = "auto";
@@ -1225,16 +1570,119 @@ Translations:`;
     const el = ensureOverlay();
     if (!el) return;
     const textEl = el.querySelector(".yds-text");
-    if (!text || !STATE.settings.enabled) {
+    const sourceEl = el.querySelector(".yds-source");
+    const sourceShown = sourceEl && sourceEl.style.display !== "none" && sourceEl.textContent;
+    if (!STATE.settings.enabled || (!text && !sourceShown)) {
       el.style.display = "none";
       if (textEl) textEl.textContent = "";
       return;
     }
     el.style.display = "";
     if (textEl) {
-      textEl.textContent = text;
-      avoidOrphanCaptionLine(textEl, text);
+      textEl.textContent = text || "";
+      const clip = textEl.closest(".yds-clip");
+      if (clip) clip.style.display = text ? "" : "none";
+      // Live mode is a stream, not a line: its width is fixed by CSS and its
+      // height is clipped, so neither measurement applies. Running them here
+      // would also be ruinous — the orphan check builds a Range per character,
+      // several times a second, for as long as someone is talking.
+      if (text && !live.active) {
+        matchNativeCaptionWidth();
+        avoidOrphanCaptionLine(textEl, text);
+      }
     }
+  }
+
+  // The upper line: what is being said, as heard by the local recogniser.
+  // Only live transcription uses it.
+  function renderSourceLine(text) {
+    const el = ensureOverlay();
+    if (!el) return;
+    const sourceEl = el.querySelector(".yds-source");
+    if (!sourceEl) return;
+    const clip = sourceEl.closest(".yds-clip");
+    if (!text) {
+      if (clip) clip.style.display = "none";
+      sourceEl.textContent = "";
+      return;
+    }
+    if (clip) clip.style.display = "";
+    sourceEl.textContent = text;
+    el.style.display = "";
+    // Outside live mode the box is sized to its content, and with only the
+    // upper line filled it would otherwise keep whatever width the lower line
+    // last asked for.
+    if (!live.active) matchNativeCaptionWidth();
+  }
+
+  // Wrap the translation at roughly the width the player is using for its own
+  // caption line, so the two read as a matched pair instead of the translation
+  // folding onto an extra line while the original still fits.
+  //
+  // This has to set `width`, not `max-width`. The overlay is an absolutely
+  // positioned shrink-to-fit box, and the browser picks a used width well under
+  // max-width — measured on a 32-character line: 320px/3 lines under a 378px
+  // max-width, but 2 lines when the width is set outright.
+  //
+  // Bounded on both sides. Never wider than the text actually needs, so a short
+  // line still hugs its text instead of sitting in a wide empty bar; never
+  // narrower than 30% of the video, so a stray native fragment ("So,") can't
+  // squeeze the translation into a column.
+  function matchNativeCaptionWidth() {
+    if (!overlayEl) return;
+    const textEl = overlayEl.querySelector(".yds-text");
+    const container = getVideoContainer();
+    const containerW = container ? container.getBoundingClientRect().width : 0;
+    if (!textEl || !containerW) {
+      overlayEl.style.width = "";      // fall back to the stylesheet's max-width
+      return;
+    }
+
+    const cs = getComputedStyle(overlayEl);
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const nativeWidth = P && P.nativeCaptionWidth ? P.nativeCaptionWidth() : 0;
+
+    // Two ways to decide how wide to wrap, and which one applies depends on
+    // whether there is an original on screen to line up with.
+    let target;
+    if (nativeWidth) {
+      // Match the player's own caption line, clamped so a stray fragment
+      // ("So,") can't squeeze us into a column.
+      target = Math.min(Math.max(nativeWidth, containerW * 0.3), containerW * 0.96 - pad);
+    } else {
+      // Nothing to match — live transcription, or translation-only with the
+      // player's captions closed. Fall back to the viewer's chosen share of the
+      // player. This matters when the picture itself is pillarboxed (4:3 footage
+      // in a 16:9 player): filling the player would push text past the image.
+      const pct = Math.max(20, Math.min(100, Number(STATE.settings.captionWidth) || 100));
+      target = containerW * (pct / 100) - pad;
+    }
+
+    // Measure both lines: live transcription often has the original up before
+    // its translation arrives, and sizing off an empty lower line would collapse
+    // the box and then jump when the translation lands.
+    const sourceEl = overlayEl.querySelector(".yds-source");
+    const needed = Math.max(
+      measureUnwrappedWidth(textEl),
+      sourceEl && sourceEl.style.display !== "none" ? measureUnwrappedWidth(sourceEl) : 0
+    );
+    if (!needed) { overlayEl.style.width = ""; return; }
+    // Chrome reports content-box widths through `width`; add the padding back
+    // when the page has put the element in border-box.
+    const extra = cs.boxSizing === "border-box" ? pad : 0;
+    overlayEl.style.width = `${Math.round(Math.min(needed, target) + extra)}px`;
+  }
+
+  // Width this text would take on a single unwrapped line.
+  function measureUnwrappedWidth(textEl) {
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;left:-9999px;top:0";
+    probe.style.font = getComputedStyle(textEl).font;
+    probe.textContent = (textEl.textContent || "").replace(/\n/g, " ");
+    document.body.appendChild(probe);
+    const w = probe.getBoundingClientRect().width;
+    probe.remove();
+    return w;
   }
 
   function lineLengthsForTextNode(textNode) {
@@ -1292,13 +1740,15 @@ Translations:`;
   }
 
   // ---------- SPA nav handling ----------
-  function watchUrlChanges() {
+  function watchUrlChanges(tryAttach) {
     let lastUrl = location.href;
     new MutationObserver(() => {
       if (location.href !== lastUrl) {
         lastUrl = location.href;
-        const m = /[?&]v=([^&]+)/.exec(location.search);
-        const newVid = m ? m[1] : null;
+        // Landing page → video page is a URL change with no page load, so this
+        // is where a session that started with nothing to do comes alive.
+        if (tryAttach) tryAttach();
+        const newVid = P ? P.getVideoId() : null;
         if (newVid !== STATE.videoId) {
           abortInflightTranslation("video changed");
           closePaidApiPrompt();
@@ -1314,11 +1764,17 @@ Translations:`;
           preCuesTranslated = [];
           sourceCuesCache = null;
           availableTracks = [];
-          nativeTargetRequested = false;
+          trackRequested = false;
+          sourceRequestAttempts = 0;
+          sourceLang = "";
+          sourceIsAsr = false;
+          betterSourceRequested = false;
           seenTrackKeys.clear();
           translationCache.clear();
           lastNativeText = "";
           currentRenderedText = "";
+          if (P) P.reset();
+          stopLive();
           renderOverlay("");
         }
       }
@@ -1327,17 +1783,22 @@ Translations:`;
 
   // ---------- messaging with popup ----------
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    // With all_frames on, this script also runs in the player's helper frames.
+    // Staying silent there lets the frame that actually holds the video answer
+    // the popup — sendMessage takes the first reply it gets.
+    if (!P) return;
     if (msg?.type === "YDS_GET_INFO") {
-      const m = /[?&]v=([^&]+)/.exec(location.search);
       sendResponse({
-        videoId: m ? m[1] : null,
+        platform: STATE.platform,
+        videoId: P ? P.getVideoId() : null,
         tracks: availableTracks,
         translations: [],
         settings: STATE.settings,
         nativeCaptionText: currentNativeText(),
         translationStatus,
         preCuesLoaded: preCuesNative.length + preCuesTranslated.length,
-        usingNativeTrack: preCuesNative.length > 0
+        usingNativeTrack: preCuesNative.length > 0,
+        live: { active: live.active, status: live.status, detail: live.detail }
       });
       return true;
     }
@@ -1345,18 +1806,61 @@ Translations:`;
       sendResponse(approvePaidApiForCurrentVideo("popup approval"));
       return true;
     }
+    if (msg?.type === "YDS_LIVE_START") {
+      startLive().then(sendResponse);
+      return true;   // async
+    }
+    if (msg?.type === "YDS_LIVE_STOP") {
+      sendResponse(stopLive());
+      return true;
+    }
   });
 
   // ---------- boot ----------
   (async function boot() {
-    injectPageScript();      // Install fetch/XHR patches ASAP.
+    const platformId = window.YDS_PLATFORMS && window.YDS_PLATFORMS.detect();
+    if (!platformId) return;
+
+    const ctx = {
+      log,
+      settings: () => STATE.settings,
+      langMatches,
+      coalesce: coalesceIdenticalCues,
+      onTrackList: handleTrackList,
+      ingest: ingestCues
+    };
+
+    // Attaching is deliberately retryable. These sites are single-page apps: the
+    // viewer often lands on a home or listing page — where there is no video and
+    // nothing for us to do — and clicks through to a video without a page load.
+    // Deciding once at document_start and giving up would leave the extension
+    // dead for the rest of the session, which is exactly what it used to do.
+    function tryAttach() {
+      if (P) return true;
+      const candidate = window.YDS_PLATFORMS.create(platformId, ctx);
+      // Also weeds out the player's helper frames, since we run in all frames.
+      if (!candidate || !candidate.looksLikeVideoPage()) return false;
+      P = candidate;
+      STATE.platform = platformId;
+      P.start();          // page-world hooks go in first, before settings load
+      STATE.videoId = P.getVideoId();
+      scheduleAttach();
+      watchSeeks();
+      watchPlayback();
+      requestAnimationFrame(renderTick);
+      log("attached", { platform: platformId, videoId: STATE.videoId });
+      return true;
+    }
+
+    tryAttach();
+
     await loadSettings();
+    if (typeof ydsSetUiLang === "function") ydsSetUiLang(STATE.settings.uiLang);
     cacheKeyLang = STATE.settings.secondLang;
-    const m = /[?&]v=([^&]+)/.exec(location.search);
-    STATE.videoId = m ? m[1] : null;
-    watchUrlChanges();
-    scheduleAttach();
-    requestAnimationFrame(renderTick);
-    log("booted", { videoId: STATE.videoId, secondLang: STATE.settings.secondLang });
+    if (P) STATE.videoId = P.getVideoId();
+    drainPending();
+
+    watchUrlChanges(tryAttach);
+    log("booted", { platform: platformId, attached: !!P, secondLang: STATE.settings.secondLang });
   })();
 })();

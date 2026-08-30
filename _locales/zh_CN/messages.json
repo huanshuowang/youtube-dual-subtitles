@@ -3,6 +3,6 @@
     "message": "HappySubs 双语字幕"
   },
   "appDesc": {
-    "message": "在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。"
+    "message": "在 YouTube、Vimeo、B站 上同时显示两种语言的字幕；没有字幕的视频还能实时听译。"
   }
 }

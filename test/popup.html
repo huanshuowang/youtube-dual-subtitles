@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS popup harness</title>
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+  #mount { border: 1px solid #ddd; margin-top: 16px; padding: 8px; max-width: 420px; }
+</style>
+
+<h1>YDS popup harness</h1>
+<pre id="out">running…</pre>
+<div id="mount"></div>
+
+<script>
+// popup.js runs top-to-bottom and calls init() itself, so everything it needs
+// has to exist before we load it. uiLang comes from the query string, letting
+// one page cover every language setting by reloading.
+const UI_LANG = new URLSearchParams(location.search).get("uiLang") || "auto";
+const STORE = { ydsSettings: {
+  enabled: true, secondLang: "zh-Hans", uiLang: UI_LANG, translationOnly: false,
+  bottomOffset: 22, fontSize: 22, color: "#ffffff", background: "rgba(0,0,0,0.6)",
+  translationProvider: "google", paidApiAskEachVideo: false, apiKeys: {}
+} };
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, lastError: null },
+  i18n: { getUILanguage: () => "en-US" },        // pretend the browser is English
+  storage: {
+    sync: {
+      // popup.js awaits this one, so it must return a promise.
+      get: (k) => Promise.resolve(JSON.parse(JSON.stringify(STORE))),
+      set: (obj) => { Object.assign(STORE, obj); return Promise.resolve(); }
+    },
+    onChanged: { addListener() {} }
+  },
+  tabs: {
+    query: () => Promise.resolve([{ id: 1, url: "https://www.youtube.com/watch?v=abc" }]),
+    sendMessage: (id, msg, cb) => cb && cb({
+      platform: "youtube", videoId: "abc",
+      tracks: [{ languageCode: "en", kind: "asr", name: "English (auto)" }],
+      translations: [], settings: STORE.ydsSettings, nativeCaptionText: "",
+      translationStatus: { mode: "translated", provider: "google", cueCount: 12 },
+      preCuesLoaded: 12, usingNativeTrack: false,
+      live: { active: false, status: "stopped", detail: "" }
+    })
+  }
+};
+</script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+// Cache-busted on purpose. Without this the browser happily reuses a cached
+// i18n.js or popup.js from a previous run, and the harness reports failures
+// against code that is no longer on disk — which is far more confusing than a
+// real failure.
+const loadScript = (src) => new Promise((res, rej) => {
+  const s = document.createElement("script");
+  s.src = src + (src.includes("?") ? "&" : "?") + "cb=" + Date.now();
+  s.onload = res; s.onerror = rej;
+  document.body.appendChild(s);
+});
+
+(async () => {
+  // Mount the real popup markup, then run the real scripts against it.
+  const html = await (await fetch("../popup.html?cb=" + Date.now())).text();
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  document.getElementById("mount").append(...parsed.body.childNodes);
+  await loadScript("../i18n.js");
+  await loadScript("../popup.js");
+  await settle(700);
+
+  const status = document.getElementById("status").textContent;
+  const label = (key) => {
+    const el = document.querySelector(`[data-i18n="${key}"]`);
+    return el ? el.textContent : "(missing)";
+  };
+
+  // The thing that actually broke in the wild: init() throwing part-way, which
+  // leaves the popup half-drawn with an error in the status line.
+  check("init() finished without throwing", !/init|失败|not defined/i.test(status), JSON.stringify(status));
+  check("language dropdown got populated", document.getElementById("lang").options.length > 5,
+        String(document.getElementById("lang").options.length));
+  check("font size is filled in", document.getElementById("fontSize").value === "22",
+        document.getElementById("fontSize").value);
+  check("second language is selected", document.getElementById("lang").value === "zh-Hans",
+        document.getElementById("lang").value);
+
+  const expected = UI_LANG === "zh"
+    ? { enable: "启用", only: "仅显示翻译字幕（不用开原生字幕）" }
+    : { enable: "Enable", only: "Translation only (no need to turn on captions)" };
+  check(`uiLang=${UI_LANG}: Enable label`, label("enable") === expected.enable, JSON.stringify(label("enable")));
+  check(`uiLang=${UI_LANG}: translation-only label`, label("translationOnly") === expected.only,
+        JSON.stringify(label("translationOnly")));
+
+  // --- tabs ---
+  check("both tabs exist", !!document.getElementById("tabTranslate") && !!document.getElementById("tabLive"), "");
+  check("translate tab is the default", document.getElementById("panelTranslate").hidden === false
+        && document.getElementById("panelLive").hidden === true, "");
+  document.getElementById("tabLive").click();
+  await settle(150);
+  check("clicking 實時聽譯 swaps the panels", document.getElementById("panelLive").hidden === false
+        && document.getElementById("panelTranslate").hidden === true, "");
+  check("live panel explains itself before you start",
+        document.getElementById("liveStatus").textContent.length > 20,
+        JSON.stringify(document.getElementById("liveStatus").textContent.slice(0, 40)));
+  check("live tab says which sites it covers",
+        label("liveScope").length > 15, JSON.stringify(label("liveScope").slice(0, 30)));
+  document.getElementById("tabTranslate").click();
+  await settle(120);
+  check("translate tab says which sites it covers",
+        label("translateScope").length > 15, JSON.stringify(label("translateScope").slice(0, 30)));
+  document.getElementById("tabLive").click();
+  await settle(120);
+  check("live panel links to the setup guide",
+        !!document.getElementById("liveStatus").querySelector("a"), "");
+  check("shared styling stays visible on both tabs",
+        document.getElementById("fontSize").offsetParent !== null, "");
+  document.getElementById("tabTranslate").click();
+  await settle(150);
+  check("clicking back returns to translate", document.getElementById("panelTranslate").hidden === false, "");
+
+  // With live running, the status line must describe live — not a subtitle
+  // track the viewer isn't looking at. This read "no subtitles picked up yet"
+  // while captions were visibly on screen.
+  const liveStatus = statusTextFor(
+    { platform: "bilibili", videoId: "BV1", preCuesLoaded: 0,
+      translationStatus: {}, live: { active: true, status: "listening" } },
+    { id: 1 });
+  check("status line reflects live transcription while it runs",
+        /实时听译进行中|Live transcription is running/.test(liveStatus),
+        JSON.stringify(liveStatus.slice(0, 40)));
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    `uiLang=${UI_LANG} (browser says en-US)\n\n` +
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

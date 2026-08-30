@@ -17,5 +17,11 @@ npm-debug.log*
 *.zip
 *.crx
 dist/
-# 例外：网站提供下载的扩展包需要跟随仓库发布
-!docs/happysubs-*.zip
+# The packaged extension is distributed through the Chrome Web Store, not from
+# this repository — *.zip above already covers it, and nothing should re-add it.
+
+# Live transcription: the recogniser's Python env and model are built by
+# setup.sh on each machine, not carried in git. The venv holds per-architecture
+# binaries and the model is ~300MB from the sherpa-onnx project's releases.
+server/.venv/
+server/model/

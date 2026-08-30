@@ -19,6 +19,72 @@
   overflow-wrap: normal;
 }
 
+/* Live transcription's upper line: what the local recogniser heard. Slightly
+   dimmer than the translation below it, so the eye lands on the translation
+   first — the original is there for reference, not to be read. Other caption
+   sources leave this line hidden, because the player is already showing the
+   original itself. */
+.yds-source {
+  opacity: 0.82;
+  font-size: 0.86em;
+}
+
+/* ---- live transcription layout ----
+   A stream needs different rules from a subtitle line. A track gives us one
+   finished sentence at a time, so the box is sized to it. Live text is revised
+   several times a second, and sizing to content means the box jitters on every
+   revision. So in live mode the width is fixed to the viewer's chosen share of
+   the player, the height is pinned to two lines with older text scrolling off
+   the top, and the background sits on the text itself rather than on a box that
+   keeps changing shape. */
+.yds-overlay.yds-live {
+  width: var(--yds-live-width, 60%);
+  max-width: var(--yds-live-width, 60%);
+  padding: 0;
+  background: transparent !important;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.yds-overlay.yds-live.yds-live-visible,
+.yds-overlay.yds-live.yds-dragging {
+  opacity: 1;
+}
+
+.yds-overlay.yds-live .yds-clip {
+  line-height: 1.3;
+  max-height: 3em;            /* two lines plus the box's own padding */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;  /* keep the newest line, clip the oldest */
+  align-items: center;
+}
+
+/* A small, deliberate gap between the two languages — they are separate
+   thoughts, unlike two halves of one wrapped sentence. */
+.yds-overlay.yds-live .yds-clip + .yds-clip { margin-top: 3px; }
+
+/* One box per language, not one per line.
+   Painting the background on each line (box-decoration-break) leaves the
+   leading between them showing through as a stripe of video across the middle
+   of a sentence — a sentence that wrapped should still read as one block. The
+   box is inline-block so it hugs the text rather than filling the player. */
+.yds-overlay.yds-live .yds-wrap {
+  display: inline-block;
+  text-align: center;
+  background: var(--yds-live-bg, rgba(0, 0, 0, 0.65));
+  padding: 2px 10px;
+  border-radius: 4px;
+  max-width: 100%;
+}
+
+.yds-overlay.yds-live .yds-line {
+  display: inline;
+  background: none;
+  padding: 0;
+}
+
 /* The drag handle sits just above the overlay and only becomes visible
    when the mouse is near the overlay, or during an active drag. */
 .yds-drag-handle {
@@ -53,13 +119,19 @@
   outline-offset: 2px;
 }
 
-/* Set briefly by inject.js while we ask YouTube's player to swap tracks so we
-   can intercept the user's target-language track. Hides YouTube's own caption
-   strip so the user doesn't see a flash of the wrong language. */
+/* Set briefly by inject-youtube.js while we ask YouTube's player to swap tracks
+   so we can intercept the user's target-language track. Hides YouTube's own
+   caption strip so the user doesn't see a flash of the wrong language.
+   Vimeo needs no equivalent — we fetch its .vtt files directly instead of
+   making the player load them. */
 body.yds-suppressing-native .ytp-caption-window-container {
   opacity: 0 !important;
   transition: opacity 0.1s ease;
 }
+
+/* Vimeo draws its caption strip at z-index 6 inside .vp-video-wrapper, which is
+   where we hang the overlay too. Nothing to override — this just documents that
+   the overlay's own z-index has to stay above it. */
 
 .yds-paid-api-confirm {
   position: fixed;

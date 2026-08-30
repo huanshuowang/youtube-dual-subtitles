@@ -1,0 +1,108 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS options harness</title>
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+  #mount { border: 1px solid #ddd; margin-top: 16px; }
+</style>
+
+<h1>YDS options harness</h1>
+<pre id="out">running…</pre>
+<div id="mount"></div>
+
+<script>
+// Storage stub. Loaded before i18n.js/options.js so the real scripts see it.
+const STORE = { ydsSettings: { enabled: true, secondLang: "zh-Hans", uiLang: "auto",
+                               translationOnly: false, translationProvider: "google" } };
+const listeners = [];
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, lastError: null },
+  i18n: { getUILanguage: () => "en-US" },      // pretend the browser is English
+  storage: {
+    sync: {
+      get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+      set: (obj, cb) => {
+        const prev = JSON.parse(JSON.stringify(STORE.ydsSettings));
+        Object.assign(STORE, obj);
+        setTimeout(() => {
+          listeners.forEach(fn => fn({ ydsSettings: { newValue: STORE.ydsSettings, oldValue: prev } }, "sync"));
+          cb && cb();
+        }, 0);
+      }
+    },
+    onChanged: { addListener: (fn) => listeners.push(fn) }
+  }
+};
+
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+// Cache-busted on purpose. Without this the browser happily reuses a cached
+// i18n.js or popup.js from a previous run, and the harness reports failures
+// against code that is no longer on disk — which is far more confusing than a
+// real failure.
+const loadScript = (src) => new Promise((res, rej) => {
+  const s = document.createElement("script");
+  s.src = src + (src.includes("?") ? "&" : "?") + "cb=" + Date.now();
+  s.onload = res; s.onerror = rej;
+  document.body.appendChild(s);
+});
+
+(async () => {
+  // Pull the real options page's markup in, so we test the shipped DOM.
+  const html = await (await fetch("../options.html?cb=" + Date.now())).text();
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  document.getElementById("mount").appendChild(parsed.querySelector("main"));
+
+  // Then the real scripts, in the order the page loads them.
+  await loadScript("../i18n.js");
+  await loadScript("../options.js");
+  await settle(600);
+
+  const label = () => document.querySelector('[data-i18n="interfaceLanguage"]').textContent;
+  const enableLabel = () => document.querySelector('[data-i18n="enable"]').textContent;
+  const sel = document.getElementById("uiLang");
+
+  check("auto follows the browser (en-US -> English)", label() === "Panel language", JSON.stringify(label()));
+  check("the stored value populates the dropdown", sel.value === "auto", sel.value);
+
+  sel.value = "zh";
+  sel.dispatchEvent(new Event("change"));
+  await settle(400);
+  check("switching to 中文 re-renders the page", label() === "面板语言", JSON.stringify(label()));
+  check("switch labels change too", enableLabel() === "启用", JSON.stringify(enableLabel()));
+  check("choice is persisted", STORE.ydsSettings.uiLang === "zh", STORE.ydsSettings.uiLang);
+
+  sel.value = "en";
+  sel.dispatchEvent(new Event("change"));
+  await settle(400);
+  check("switching to English re-renders", label() === "Panel language", JSON.stringify(label()));
+
+  sel.value = "auto";
+  sel.dispatchEvent(new Event("change"));
+  await settle(400);
+  check("back to auto follows the browser again", label() === "Panel language", JSON.stringify(label()));
+
+  const only = document.getElementById("translationOnly");
+  only.checked = true;
+  only.dispatchEvent(new Event("change"));
+  await settle(400);
+  check("translation-only writes to the shared record", STORE.ydsSettings.translationOnly === true,
+        String(STORE.ydsSettings.translationOnly));
+  check("saving did not clobber the popup's keys", STORE.ydsSettings.secondLang === "zh-Hans"
+        && STORE.ydsSettings.translationProvider === "google",
+        JSON.stringify({ secondLang: STORE.ydsSettings.secondLang, provider: STORE.ydsSettings.translationProvider }));
+
+  const en = document.getElementById("enabled");
+  en.checked = false;
+  en.dispatchEvent(new Event("change"));
+  await settle(400);
+  check("enable default writes through", STORE.ydsSettings.enabled === false, String(STORE.ydsSettings.enabled));
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

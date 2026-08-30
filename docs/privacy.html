@@ -13,9 +13,9 @@
 </head>
 <body>
   <h1>Privacy Policy for HappySubs</h1>
-  <p class="updated">Last updated: July 5, 2026</p>
+  <p class="updated">Last updated: August 30, 2026</p>
 
-  <p>HappySubs is an unofficial browser extension that adds a second subtitle overlay while you watch YouTube videos. This extension is not affiliated with, endorsed by, or sponsored by YouTube or Google.</p>
+  <p>HappySubs is an unofficial browser extension that adds a second subtitle overlay while you watch YouTube, Vimeo and Bilibili videos, and can optionally transcribe videos that have no subtitles at all. This extension is not affiliated with, endorsed by, or sponsored by YouTube, Google, Vimeo or Bilibili.</p>
 
   <h2>Data We Store</h2>
   <p>The extension stores your settings in Chrome extension storage, such as selected subtitle language, subtitle style, translation provider, and optional API keys that you enter for third-party translation services. This data is stored in your browser through Chrome storage and is not sent to any server operated by the extension developer.</p>
@@ -23,16 +23,27 @@
   <h2>Data Sent to Third Parties</h2>
   <p>When you use translation features, subtitle text may be sent directly from your browser to the translation provider you choose, such as Google Translate, OpenAI, Anthropic Claude, Google Gemini, or DeepSeek. If you enter an API key for one of these services, that key is used only to call the selected provider from your browser.</p>
 
+  <h2>Live Transcription and Audio</h2>
+  <p>Live transcription is an optional feature that is off unless you install a separate local program and switch it on in the extension. While it is running, the extension reads the audio of the video you are watching and sends it over a loopback connection (<code>ws://127.0.0.1:8765</code>) to that program, which runs on your own computer and returns recognised text.</p>
+  <p>The audio does not leave your computer. It is not uploaded anywhere, not recorded to disk by the extension, and not sent to the extension developer or to any third party. Nothing is captured while the feature is switched off, and the extension never accesses your microphone — only the audio of the video element on the page you are watching.</p>
+  <p>The recognised text is then translated the same way subtitle text is: sent to whichever translation provider you have chosen.</p>
+
   <h2>Data We Do Not Collect</h2>
   <p>The extension developer does not operate a backend server for this extension, does not collect your browsing history, does not sell user data, and does not share user data with advertisers or data brokers.</p>
 
   <h2>Permissions</h2>
-  <p>The extension requests access to YouTube pages so it can display the subtitle overlay and process available subtitle text while you watch videos. It requests access to translation provider domains only so it can send subtitle text for translation when you use those providers.</p>
+  <p>Every host the extension asks for corresponds to something it actually does:</p>
+  <ul>
+    <li><strong>www.youtube.com, vimeo.com, player.vimeo.com, www.bilibili.com</strong> — the pages the extension runs on, to read the video's subtitles and draw the overlay.</li>
+    <li><strong>captions.vimeo.com, api.bilibili.com</strong> — where those two sites publish their subtitle files, which the extension fetches to translate.</li>
+    <li><strong>translate.googleapis.com, api.anthropic.com, api.openai.com, generativelanguage.googleapis.com, api.deepseek.com</strong> — the translation providers, contacted only for the one you have selected.</li>
+  </ul>
+  <p>Live transcription needs no host permission: it talks to a program on your own machine over a loopback address.</p>
 
   <h2>Deleting Your Data</h2>
   <p>You can delete extension data by removing the extension from Chrome or clearing the extension's stored data in your browser. You can also remove saved API keys from the extension popup.</p>
 
   <h2>Contact</h2>
-  <p>For questions or requests, please open an issue at <a href="https://github.com/huanshuowang/youtube-dual-subtitles/issues">github.com/huanshuowang/youtube-dual-subtitles</a>.</p>
+  <p>For questions or requests, please open an issue at <a href="https://github.com/huanshuowang/happysubs/issues">github.com/huanshuowang/happysubs</a>.</p>
 </body>
 </html>

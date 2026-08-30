@@ -1,0 +1,169 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS bilibili-adapter harness</title>
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<h1>YDS bilibili-adapter harness</h1>
+<pre id="out">running…</pre>
+
+<!-- stands in for the player DOM the adapter reads -->
+<div id="bilibili-player">
+  <div class="bpx-player-video-area">
+    <div class="bpx-player-video-wrap"><video id="v"></video></div>
+    <div class="bpx-player-subtitle-panel-wrap"><span>播放器自己的字幕</span></div>
+  </div>
+</div>
+
+<script>
+window.chrome = { runtime: { getURL: (f) => "/" + f } };
+
+// Canned Bilibili API responses, shaped exactly like the live ones (verified
+// against www.bilibili.com: both endpoints answer code 0 with cookies, no wbi
+// signing). Nothing here touches the network.
+const VIEW = { code: 0, data: { cid: 111, pages: [{ cid: 111 }, { cid: 222 }] } };
+const PLAYER = { code: 0, data: { subtitle: { subtitles: [
+  { lan: "ai-zh", lan_doc: "中文（自动生成）", subtitle_url: "//aisubtitle.example/ai-zh.json" },
+  { lan: "zh-CN", lan_doc: "中文（中国）",     subtitle_url: "https://sub.example/zh.json" },
+  { lan: "en-US", lan_doc: "英语（美国）",     subtitle_url: "http://sub.example/en.json" }
+] } } };
+const TRACKS = {
+  "https://sub.example/zh.json": { body: [
+    { from: 1.5, to: 3.0,  content: " 第一句 " },
+    { from: 3.0, to: 5.25, content: "第二句" },
+    { from: 5.25, to: 5.25, content: "零长度，应被丢掉" },
+    { from: 6.0, to: 7.0,  content: "   " }
+  ] },
+  "https://sub.example/en.json": { body: [{ from: 0, to: 2, content: "hello" }] }
+};
+
+window.__fetched = [];
+window.fetch = (url) => {
+  const u = String(url);
+  window.__fetched.push(u);
+  let body = null;
+  if (u.includes("/x/web-interface/view")) body = VIEW;
+  else if (u.includes("/x/player/v2")) body = PLAYER;
+  else if (TRACKS[u]) body = TRACKS[u];
+  if (!body) return Promise.reject(new Error("unexpected url " + u));
+  return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+};
+</script>
+<script src="../platform.js"></script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+
+const lists = [];
+const ingests = [];
+const ctx = {
+  log: (...a) => console.log("[ctx]", ...a),
+  settings: () => ({ enabled: true, secondLang: "zh-Hans" }),
+  langMatches: (a, b) => String(a).toLowerCase().split("-")[0] === String(b).toLowerCase().split("-")[0],
+  coalesce: (cues) => cues,
+  onTrackList: (t) => lists.push(t),
+  ingest: (p) => ingests.push(p)
+};
+
+(async () => {
+  // The adapter reads the BV id out of location.pathname, so the harness has to
+  // look like a video page. replaceState is same-origin and navigates nothing.
+  history.replaceState(null, "", "/video/BV13bgn6gEg1");
+
+  const a = window.YDS_PLATFORMS.create("bilibili", ctx);
+  a.start();
+  await settle(600);
+
+  const list = lists[lists.length - 1] || [];
+  check("track list published", list.length === 3, JSON.stringify(list.map(t => t.languageCode + (t.kind === "asr" ? "(asr)" : ""))));
+  check("ai- prefix becomes kind=asr and is stripped from the code",
+        list.some(t => t.languageCode === "zh" && t.kind === "asr"),
+        JSON.stringify(list.find(t => t.kind === "asr")));
+  check("human tracks keep their full code (zh-CN, not zh)",
+        list.some(t => t.languageCode === "zh-CN" && t.kind === ""),
+        JSON.stringify(list.map(t => t.languageCode)));
+
+  // Pull the human Chinese track.
+  a.requestTrack({ languageCode: "zh-CN", kind: "" });
+  await settle(500);
+  const ing = ingests[0];
+  check("cues ingested", !!ing, String(ingests.length));
+  if (ing) {
+    check("Bilibili's from/to/content maps to start/end/text",
+          ing.cues[0].start === 1.5 && ing.cues[0].end === 3 && ing.cues[0].text === "第一句",
+          JSON.stringify(ing.cues[0]));
+    check("zero-length and blank cues dropped", ing.cues.length === 2, String(ing.cues.length));
+    check("marked as human-authored", ing.isAsr === false, String(ing.isAsr));
+    check("language passed through", ing.lang === "zh-CN", ing.lang);
+  }
+
+  // Asking again must not refetch.
+  const before = window.__fetched.length;
+  a.requestTrack({ languageCode: "zh-CN", kind: "" });
+  await settle(300);
+  check("the same track is not fetched twice", window.__fetched.length === before,
+        `${before} → ${window.__fetched.length}`);
+
+  // forgetLoadedCues is what a target-language change calls.
+  a.forgetLoadedCues();
+  a.requestTrack({ languageCode: "zh-CN", kind: "" });
+  await settle(400);
+  check("forgetLoadedCues allows a refetch", window.__fetched.length > before,
+        `${before} → ${window.__fetched.length}`);
+
+  // Protocol-relative and http URLs must both be normalised to https.
+  check("//… and http:// subtitle urls become https",
+        !window.__fetched.some(u => u.startsWith("//") || u.startsWith("http://")),
+        JSON.stringify(window.__fetched.filter(u => !u.startsWith("https://"))));
+
+  // DOM readers.
+  check("getVideoEl finds the player video", a.getVideoEl() === document.getElementById("v"), "");
+  check("getContainer is the player video area",
+        a.getContainer() === document.querySelector(".bpx-player-video-area"), "");
+  check("nativeLines reads the player's own subtitle",
+        JSON.stringify(a.nativeLines()) === JSON.stringify(["播放器自己的字幕"]), JSON.stringify(a.nativeLines()));
+
+  // Video id shapes (location can't be faked here, so the regex is checked directly).
+  const idOf = (path, search) => {
+    const bv = (path.match(/\/video\/(BV\w+)/) || [])[1];
+    if (!bv) return null;
+    const p = new URLSearchParams(search).get("p");
+    return p && p !== "1" ? `${bv}#p${p}` : bv;
+  };
+  check("id from /video/BVxxx", idOf("/video/BV13bgn6gEg1", "") === "BV13bgn6gEg1", idOf("/video/BV13bgn6gEg1", ""));
+  check("multi-part videos get separate ids",
+        idOf("/video/BV13bgn6gEg1", "?p=3") === "BV13bgn6gEg1#p3", idOf("/video/BV13bgn6gEg1", "?p=3"));
+  check("p=1 is the same as no p", idOf("/video/BV1x", "?p=1") === "BV1x", idOf("/video/BV1x", "?p=1"));
+  check("no id off a video page", idOf("/", "") === null, String(idOf("/", "")));
+
+  // Playlist pages (watch later, favourites) put the BV id in the query string
+  // and never in the path — the shape this was actually found failing on.
+  const shapes = (path, search) => {
+    const params = new URLSearchParams(search);
+    return {
+      looksLikeVideoPage: /\/video\/(BV\w+|av\d+)/.test(path) || /\/(bangumi\/play|festival|list)\//.test(path),
+      id: (path.match(/\/video\/(BV\w+|av\d+)/) || [])[1]
+        || (path.match(/\/bangumi\/play\/(\w+)/) || [])[1]
+        || params.get("bvid")
+        || (/\/(festival|list)\//.test(path) ? path : null),
+      apiBv: (path.match(/\/video\/(BV\w+)/) || [])[1] || params.get("bvid")
+    };
+  };
+  const watchLater = shapes("/list/watchlater", "?oid=115569651293558&bvid=BV1NaygBEEz8");
+  check("watch-later playlist counts as a video page", watchLater.looksLikeVideoPage, "");
+  check("...and its bvid comes out of the query string", watchLater.id === "BV1NaygBEEz8", watchLater.id);
+  check("...and the subtitle API gets that same bvid", watchLater.apiBv === "BV1NaygBEEz8", watchLater.apiBv);
+  const bangumi = shapes("/bangumi/play/ep123456", "");
+  check("bangumi episode counts as a video page", bangumi.looksLikeVideoPage, "");
+  const home = shapes("/", "");
+  check("the home page does not", !home.looksLikeVideoPage, "");
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

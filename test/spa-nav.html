@@ -1,0 +1,124 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS SPA-navigation harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  #player { position: relative; width: 420px; height: 236px; background: #222; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<h1>YDS SPA-navigation harness</h1>
+<pre id="out">running…</pre>
+<div id="player"><video id="v"></video></div>
+
+<script>
+// The situation this covers: the viewer lands on a home or listing page, where
+// there is no video, and clicks through to one without a page load. The content
+// script boots on the listing page. If it decides once that there is nothing to
+// do and gives up, the extension is dead for the rest of the session — which is
+// what used to happen on Bilibili and Vimeo (YouTube got away with it because
+// its looksLikeVideoPage is always true).
+const STORE = { ydsSettings: { enabled: true, secondLang: "zh-Hans", uiLang: "auto",
+                               bottomOffset: 20, fontSize: 22, color: "#ffffff",
+                               background: "rgba(0,0,0,0.6)", translationProvider: "google",
+                               captionWidth: 60, translationOnly: false, apiKeys: {} } };
+const messageHandlers = [];
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener: (fn) => messageHandlers.push(fn) }, lastError: null },
+  i18n: { getUILanguage: () => "en-US" },
+  storage: { sync: { get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+                     set: (o, cb) => { Object.assign(STORE, o); cb && cb(); } },
+             onChanged: { addListener() {} } }
+};
+window.__send = (msg) => new Promise(resolve => {
+  let answered = false;
+  for (const fn of messageHandlers) {
+    const kept = fn(msg, {}, (r) => { answered = true; resolve(r); });
+    if (kept === true) return;
+  }
+  if (!answered) resolve(null);
+});
+
+// Start on a listing page.
+history.replaceState(null, "", "/");
+window.__starts = 0;
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script src="../live.js"></script>
+<script>
+// A platform that only counts /video/… as a video page, like Bilibili's.
+window.__ctx = null;
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    window.__ctx = ctx;
+    return {
+      id: "mock", requiresCcForTracks: false,
+      looksLikeVideoPage: () => /\/video\//.test(location.pathname),
+      getVideoId: () => (location.pathname.match(/\/video\/(\w+)/) || [])[1] || null,
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("player"),
+      isCcOn: () => true,
+      nativeLines: () => [], nativeCaptionWidth: () => 0,
+      observeTarget: () => document.getElementById("player"),
+      start() { window.__starts++; },
+      requestTrack() {}, forgetLoadedCues() {}, reset() {}
+    };
+  }
+};
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+
+// A SPA route change: push the URL, then touch the DOM so the observer fires.
+function navigateTo(path) {
+  history.pushState(null, "", path);
+  document.body.appendChild(document.createComment("route"));
+}
+
+(async () => {
+  Object.defineProperty(document.getElementById("v"), "currentTime", { get: () => 1, configurable: true });
+  await settle(700);
+
+  const onListing = await window.__send({ type: "YDS_GET_INFO" });
+  check("on a listing page it stays out of the way", onListing === null, JSON.stringify(onListing));
+  check("and has not started the platform adapter", window.__starts === 0, String(window.__starts));
+
+  // Click through to a video, SPA style.
+  navigateTo("/video/BV1aaa");
+  await settle(600);
+
+  const onVideo = await window.__send({ type: "YDS_GET_INFO" });
+  check("clicking through to a video wakes it up", !!onVideo, JSON.stringify(onVideo && onVideo.platform));
+  check("the adapter is started exactly once", window.__starts === 1, String(window.__starts));
+  check("and it knows which video", onVideo && onVideo.videoId === "BV1aaa", onVideo && onVideo.videoId);
+
+  // Cues should now flow all the way to the overlay.
+  window.__ctx.ingest({ cues: [{ start: 0, end: 999, text: "字幕出来了" }],
+                        lang: "zh-Hans", isAsr: false, key: "t1" });
+  await settle(800);
+  const o = document.querySelector("#yt-dual-sub-overlay");
+  check("cues render after a late attach",
+        !!o && o.querySelector(".yds-text").textContent.includes("字幕出来了"),
+        JSON.stringify(o && o.querySelector(".yds-text").textContent));
+
+  // A second video: identity changes, adapter is not started again.
+  navigateTo("/video/BV2bbb");
+  await settle(500);
+  const second = await window.__send({ type: "YDS_GET_INFO" });
+  check("moving to another video updates the id", second && second.videoId === "BV2bbb",
+        second && second.videoId);
+  check("without re-starting the adapter", window.__starts === 1, String(window.__starts));
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

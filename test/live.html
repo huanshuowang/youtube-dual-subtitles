@@ -1,0 +1,282 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS live-transcription harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  #fake-player { position: relative; width: 480px; height: 270px; background: #222; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<h1>YDS live-transcription harness</h1>
+<pre id="out">running…</pre>
+<div id="fake-player"><video id="v"></video></div>
+
+<script>
+// Stands in for the local recogniser. The real one is a Python process outside
+// this codebase; what we test here is our side of the wire — that audio gets
+// captured and sent, that partial/final messages land in the right line of the
+// overlay, and that a real subtitle track still wins.
+const sockets = [];
+window.WebSocket = class FakeWS {
+  static OPEN = 1;
+  constructor(url) {
+    this.url = url;
+    this.readyState = 1;          // OPEN, matching WebSocket.OPEN
+    this.sent = [];
+    sockets.push(this);
+    setTimeout(() => this.onopen && this.onopen(), 10);
+  }
+  send(data) { this.sent.push(data); }
+  close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  // test helpers
+  say(text, final) { this.onmessage && this.onmessage({ data: JSON.stringify({ text, final }) }); }
+};
+window.WebSocket.OPEN = 1;
+
+// Count and time translation calls, so we can tell a throttle from a debounce.
+window.__translations = [];
+const realFetch = window.fetch.bind(window);
+window.fetch = (url, opts) => {
+  const u = String(url && url.url ? url.url : url);
+  if (u.includes("translate.googleapis.com")) {
+    window.__translations.push({ at: Date.now(), q: new URL(u).searchParams.get("q") });
+  }
+  return realFetch(url, opts);
+};
+
+// Minimal audio graph. startCapture only needs these to not throw.
+let audioTapped = false;
+window.AudioContext = class FakeAudioContext {
+  constructor(opts) { this.sampleRate = (opts && opts.sampleRate) || 48000; this.destination = {}; }
+  resume() { return Promise.resolve(); }
+  close() { return Promise.resolve(); }
+  createMediaStreamSource() { audioTapped = true; return { connect() {}, disconnect() {} }; }
+  createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+  createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
+};
+HTMLMediaElement.prototype.captureStream = function () { return {}; };
+
+const STORE = { ydsSettings: { enabled: true, secondLang: "zh-Hans", uiLang: "auto",
+                               bottomOffset: 20, fontSize: 22, color: "#ffffff",
+                               background: "rgba(0,0,0,0.6)", translationProvider: "google", captionWidth: 50,
+                               translationOnly: false, apiKeys: {} } };
+const messageHandlers = [];
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener: (fn) => messageHandlers.push(fn) }, lastError: null },
+  i18n: { getUILanguage: () => "en-US" },
+  storage: { sync: { get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+                     set: (o, cb) => { Object.assign(STORE, o); cb && cb(); } },
+             onChanged: { addListener() {} } }
+};
+// Send a popup message the way chrome.tabs.sendMessage would.
+window.__send = (msg) => new Promise(resolve => {
+  let answered = false;
+  for (const fn of messageHandlers) {
+    const kept = fn(msg, {}, (r) => { answered = true; resolve(r); });
+    if (kept === true) return;
+  }
+  if (!answered) resolve(null);
+});
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script src="../live.js"></script>
+<script>
+window.__ctx = null;
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    window.__ctx = ctx;
+    return {
+      id: "mock", requiresCcForTracks: false,
+      looksLikeVideoPage: () => true,
+      getVideoId: () => "mock-1",
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("fake-player"),
+      isCcOn: () => true,
+      nativeLines: () => [], nativeCaptionWidth: () => 0,
+      observeTarget: () => document.getElementById("fake-player"),
+      start() {}, requestTrack() {}, forgetLoadedCues() {}, reset() {}
+    };
+  }
+};
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const settle = (ms) => new Promise(r => setTimeout(r, ms));
+const overlay = () => document.querySelector("#yt-dual-sub-overlay");
+const sourceLine = () => {
+  const o = overlay(); if (!o || o.style.display === "none") return "";
+  const el = o.querySelector(".yds-source");
+  return el && el.style.display !== "none" ? el.textContent : "";
+};
+const transLine = () => {
+  const o = overlay(); if (!o || o.style.display === "none") return "";
+  const el = o.querySelector(".yds-text");
+  return el ? el.textContent : "";
+};
+
+(async () => {
+  Object.defineProperty(document.getElementById("v"), "currentTime", { get: () => 1, configurable: true });
+  await settle(600);
+
+  // --- start ---
+  const started = await window.__send({ type: "YDS_LIVE_START" });
+  await settle(300);
+  check("start reports ok", started && started.ok === true, JSON.stringify(started));
+  check("the video's audio got tapped", audioTapped, String(audioTapped));
+  check("a socket was opened to the local recogniser",
+        sockets.length === 1 && sockets[0].url === "ws://127.0.0.1:8765",
+        JSON.stringify(sockets.map(s => s.url)));
+
+  const ws = sockets[0];
+
+  // --- a sentence in progress ---
+  ws.say("今天天气", false);
+  await settle(200);
+  check("a partial shows on the source line", sourceLine() === "今天天气", JSON.stringify(sourceLine()));
+  ws.say("今天天气很好", false);
+  await settle(200);
+  check("the partial is replaced, not appended", sourceLine() === "今天天气很好", JSON.stringify(sourceLine()));
+
+  // --- subtitle width: nothing on screen to match, so the viewer's share rules.
+  //     Must run before any track arrives, or a track would own the overlay and
+  //     we would be measuring its line instead of ours.
+  const player = document.getElementById("fake-player");
+  const containerW = player.getBoundingClientRect().width;
+  ws.say("这是一句很长很长的话用来把字幕撑到最大宽度看看它到底会停在哪里应该停在播放器一半的位置", false);
+  await settle(400);
+  const wideBox = overlay().getBoundingClientRect().width;
+  check("a long live line stops at the chosen share of the player",
+        Math.abs(wideBox - containerW * 0.5) <= 6,
+        JSON.stringify({ container: Math.round(containerW), want: Math.round(containerW * 0.5), got: Math.round(wideBox) }));
+
+  ws.say("短", false);
+  await settle(400);
+  const shortBox = overlay().getBoundingClientRect().width;
+  // Fixed, not fitted. A stream is revised several times a second, and sizing
+  // the box to its content makes it jitter on every revision — so in live mode
+  // the width stays put whatever the text is doing.
+  check("and a short line keeps that same width instead of jumping",
+        Math.abs(shortBox - wideBox) <= 1,
+        JSON.stringify({ long: Math.round(wideBox), short: Math.round(shortBox) }));
+
+  // --- continuous speech must still get translated ---
+  //
+  // The recogniser revises the sentence several times a second. With a debounce
+  // the timer is pushed back on every revision and nothing is translated until
+  // the speaker pauses — which is exactly the bug this guards against.
+  window.__translations = [];
+  const talkStart = Date.now();
+  for (let i = 0; i < 14; i++) {          // ~2.8s of uninterrupted talking
+    ws.say("he keeps talking and talking and talking part " + i, false);
+    await settle(200);
+  }
+  const duringSpeech = window.__translations.length;
+  const elapsed = Date.now() - talkStart;
+  check("a sentence in progress gets translated while it is still being spoken",
+        duringSpeech >= 2, JSON.stringify({ calls: duringSpeech, over_ms: elapsed }));
+  // Rate-based on purpose: a fixed ceiling here fails whenever the harness runs
+  // slow, which says nothing about the throttle. What matters is that the calls
+  // track elapsed time (one per ~900ms window) rather than tracking revisions.
+  const windows = Math.ceil(elapsed / 900) + 1;
+  check("but not once per revision — one per throttle window at most",
+        duringSpeech <= windows,
+        JSON.stringify({ revisions: 14, calls: duringSpeech, windowsAvailable: windows, over_ms: elapsed }));
+
+  // --- a wrapped sentence must read as one block ---
+  ws.say("a long enough english sentence that it has to wrap onto a second line here", false);
+  await settle(400);
+  const wrapBoxes = [...overlay().querySelectorAll(".yds-wrap")]
+    .filter(w => w.closest(".yds-clip").style.display !== "none")
+    .map(w => w.getClientRects().length);
+  check("each language keeps one background box however it wraps",
+        wrapBoxes.length > 0 && wrapBoxes.every(n => n === 1), JSON.stringify(wrapBoxes));
+
+  const clipEl = overlay().querySelector(".yds-source").closest(".yds-clip");
+  const twoLines = clipEl.getBoundingClientRect().height;
+  ws.say("a much much longer english sentence that would run to three or even four lines if the clip were not holding it to two", false);
+  await settle(400);
+  check("and the box stays two lines tall no matter how much is said",
+        Math.abs(clipEl.getBoundingClientRect().height - twoLines) <= 1,
+        JSON.stringify({ two: Math.round(twoLines), many: Math.round(clipEl.getBoundingClientRect().height) }));
+
+  // --- finalised, and translated ---
+  ws.say("the weather is nice today", true);
+  await settle(3000);
+  check("a final sentence shows as the source", sourceLine().includes("the weather is nice today"),
+        JSON.stringify(sourceLine()));
+  check("and gets translated onto the lower line", transLine() !== "", JSON.stringify(transLine()));
+
+  // --- pausing holds the line past the ordinary silence timeout ---
+  const visible = () => overlay().classList.contains("yds-live-visible");
+  ws.say("something worth pausing to read", true);
+  await settle(300);
+  document.getElementById("v").dispatchEvent(new Event("pause", { bubbles: true }));
+  await settle(5200);   // past the 4s silence fade, well short of the 8s hold
+  check("paused: still on screen after the normal silence timeout would have fired",
+        visible(), JSON.stringify({ visible: visible(), text: sourceLine() }));
+  await settle(3600);   // now past 8s
+  check("paused: gone once the hold is up", !visible(), String(visible()));
+
+  // Playing again puts it back on the ordinary timeout.
+  document.getElementById("v").dispatchEvent(new Event("play", { bubbles: true }));
+  ws.say("back to talking", false);
+  await settle(300);
+  check("playing again brings the line back", visible(), String(visible()));
+
+  // --- a seek voids the sentence in progress ---
+  ws.say("half a sentence", false);
+  await settle(150);
+  document.getElementById("v").dispatchEvent(new Event("seeking", { bubbles: true }));
+  await settle(250);
+  check("seeking clears what was heard so far", sourceLine() === "", JSON.stringify(sourceLine()));
+  check("and tells the recogniser to reset",
+        ws.sent.some(x => typeof x === "string" && x.includes("reset")),
+        JSON.stringify(ws.sent.filter(x => typeof x === "string")));
+
+  // --- a real track outranks live transcription ---
+  ws.say("recognised speech", false);
+  await settle(200);
+  window.__ctx.ingest({ cues: [{ start: 0, end: 9999, text: "a proper subtitle line" }],
+                        lang: "zh-Hans", isAsr: false, key: "track" });
+  await settle(1200);
+  // Turning live on is an explicit act, so it keeps the overlay even on a video
+  // that has subtitles. Silently ignoring the button was the bug.
+  check("live keeps the overlay while it is running, track or no track",
+        sourceLine().includes("recognised speech"),
+        JSON.stringify({ source: sourceLine(), translation: transLine() }));
+  const snapInfo = await window.__send({ type: "YDS_GET_INFO" });
+  window.__snapInfo = snapInfo && { preCues: snapInfo.preCuesLoaded, native: snapInfo.usingNativeTrack,
+                                    status: snapInfo.translationStatus && snapInfo.translationStatus.mode };
+  window.__snap = (() => { const o = overlay(); return o ? {
+      cls: o.className, display: o.style.display,
+      text: o.querySelector(".yds-text").textContent,
+      textClip: o.querySelector(".yds-text").closest(".yds-clip").style.display,
+      src: o.querySelector(".yds-source").textContent
+    } : null; })();
+  // --- stop hands it straight back to the track ---
+  const stopped = await window.__send({ type: "YDS_LIVE_STOP" });
+  await settle(600);
+  check("stopping live gives the track the overlay back",
+        transLine().includes("a proper subtitle line"),
+        JSON.stringify({ source: sourceLine(), translation: transLine() }));
+  check("and the recognised-speech line comes off screen", sourceLine() === "",
+        JSON.stringify(sourceLine()));
+  check("stop reports ok", stopped && stopped.ok === true, JSON.stringify(stopped));
+  check("the socket is closed", ws.readyState === 3, String(ws.readyState));
+
+  const info = await window.__send({ type: "YDS_GET_INFO" });
+  check("the popup can read live state", info && info.live && info.live.active === false,
+        JSON.stringify(info && info.live));
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

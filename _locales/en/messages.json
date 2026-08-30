@@ -1,8 +1,8 @@
 {
   "appName": {
-    "message": "HappySubs — Dual Subtitles for YouTube"
+    "message": "HappySubs — Dual Subtitles & Live Captions"
   },
   "appDesc": {
-    "message": "Show two subtitle languages on YouTube at once — native tracks or free Google Translate, with optional AI translation."
+    "message": "Two subtitle languages at once on YouTube, Vimeo and Bilibili — plus live transcription for videos that have no captions at all."
   }
 }

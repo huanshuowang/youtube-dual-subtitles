@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS translation-only harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  #fake-player { position: relative; width: 480px; height: 270px; background: #222; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<h1>YDS translation-only harness</h1>
+<pre id="out">running…</pre>
+
+<div id="fake-player">
+  <video id="v"></video>
+  <!-- stands in for the player's CC button; aria-pressed drives isCcOn() -->
+  <button id="cc" aria-pressed="false"></button>
+</div>
+
+<script>
+// The setting under test is read straight out of storage, so the harness
+// rewrites it and lets the change listener do the rest.
+const STORE = { ydsSettings: { enabled: true, secondLang: "en", bottomOffset: 20, fontSize: 22,
+                               color: "#ffffff", background: "rgba(0,0,0,0.6)",
+                               translationProvider: "google", translationOnly: false, apiKeys: {} } };
+const changeListeners = [];
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener() {} }, lastError: null },
+  storage: {
+    sync: {
+      get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+      set: (obj, cb) => { Object.assign(STORE, obj); cb && cb(); }
+    },
+    onChanged: { addListener: (fn) => changeListeners.push(fn) }
+  }
+};
+// Mimic the popup writing a setting: store it, then fire the change event.
+window.__setSetting = (patch) => {
+  const prev = JSON.parse(JSON.stringify(STORE.ydsSettings));
+  Object.assign(STORE.ydsSettings, patch);
+  changeListeners.forEach(fn => fn({ ydsSettings: { newValue: STORE.ydsSettings, oldValue: prev } }, "sync"));
+};
+// Opening CC makes the real player fetch its own track, which the YouTube
+// adapter intercepts — model that, or the default path has no source of cues.
+window.__ccOn = (on) => {
+  document.getElementById("cc").setAttribute("aria-pressed", on ? "true" : "false");
+  if (on && window.__ctx) {
+    window.__ctx.ingest({ cues: [{ start: 0, end: 9999, text: "eine zeile" }],
+                          lang: "de", isAsr: false, key: "intercepted" });
+  }
+};
+window.__trackRequests = [];
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script>
+// A YouTube-shaped adapter: it needs CC before it can pull a track, and it has
+// no track in the target language, so the only way to show anything is to
+// translate a source track.
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    window.__ctx = ctx;
+    setTimeout(() => ctx.onTrackList([
+      { languageCode: "de", kind: "", name: "Deutsch" },
+      { languageCode: "de", kind: "asr", name: "Deutsch (auto)" }
+    ]), 0);
+    return {
+      id: "mock",
+      requiresCcForTracks: true,          // like YouTube
+      looksLikeVideoPage: () => true,
+      getVideoId: () => "mock-1",
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("fake-player"),
+      // null models a player we can't read: an embed with no control bar, or
+      // markup we no longer recognise.
+      isCcOn: () => window.__ccUnknown ? null
+                  : document.getElementById("cc").getAttribute("aria-pressed") === "true",
+      nativeLines: () => [],
+      nativeCaptionWidth: () => 0,
+      observeTarget: () => document.getElementById("fake-player"),
+      start() {},
+      requestTrack(t) {
+        window.__trackRequests.push(t.languageCode + (t.kind === "asr" ? "(asr)" : ""));
+        // The player answers by handing over that track's cues.
+        ctx.ingest({ cues: [{ start: 0, end: 9999, text: "eine zeile" }],
+                     lang: t.languageCode, isAsr: t.kind === "asr", key: "src" });
+      },
+      forgetLoadedCues() {}, reset() {}
+    };
+  }
+};
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const overlayText = () => {
+  const o = document.querySelector("#yt-dual-sub-overlay");
+  if (!o || o.style.display === "none") return "";
+  const t = o.querySelector(".yds-text");
+  return t ? t.textContent : "";
+};
+const settle = (ms = 400) => new Promise(r => setTimeout(r, ms));
+
+(async () => {
+  Object.defineProperty(document.getElementById("v"), "currentTime", { get: () => 1, configurable: true });
+
+  // --- default mode, CC closed ---
+  await settle(800);
+  check("default + CC off: nothing requested from the player", window.__trackRequests.length === 0,
+        JSON.stringify(window.__trackRequests));
+  check("default + CC off: no overlay text", overlayText() === "", JSON.stringify(overlayText()));
+
+  // --- default mode, CC opened ---
+  window.__ccOn(true);
+  window.__ctx.onTrackList([{ languageCode: "de", kind: "", name: "Deutsch" }]);   // player re-publishes
+  await settle(600);
+  const afterCc = overlayText();
+  check("default + CC on: overlay shows the translation", afterCc !== "", JSON.stringify(afterCc));
+
+  // --- CC closed again: overlay must follow the player back down ---
+  window.__ccOn(false);
+  await settle(300);
+  check("default: closing CC hides the overlay again", overlayText() === "", JSON.stringify(overlayText()));
+
+  // --- translation-only on, CC still closed ---
+  window.__setSetting({ translationOnly: true });
+  await settle(600);
+  check("translation-only + CC off: overlay shows anyway", overlayText() !== "", JSON.stringify(overlayText()));
+
+  // --- and back off ---
+  window.__setSetting({ translationOnly: false });
+  await settle(300);
+  check("turning it back off re-hides with CC closed", overlayText() === "", JSON.stringify(overlayText()));
+
+  // --- the sequence the user named: open CC once, close it, then tick the box ---
+  window.__setSetting({ translationOnly: false });
+  window.__ccOn(false);
+  await settle(300);
+  check("after CC off again: hidden", overlayText() === "", JSON.stringify(overlayText()));
+  window.__setSetting({ translationOnly: true });
+  await settle(400);
+  check("CC opened once, closed, then translation-only: translation shows",
+        overlayText() !== "", JSON.stringify(overlayText()));
+  window.__setSetting({ translationOnly: false });
+  await settle(200);
+
+  // --- player state unreadable: must NOT put a subtitle on screen uninvited ---
+  window.__ccUnknown = true;
+  window.__ccOn(true);                       // cues exist, state unreadable
+  await settle(400);
+  check("unreadable CC state stays hidden by default", overlayText() === "", JSON.stringify(overlayText()));
+
+  window.__setSetting({ translationOnly: true });
+  await settle(400);
+  check("unreadable CC state still shows in translation-only", overlayText() !== "", JSON.stringify(overlayText()));
+  window.__ccUnknown = false;
+
+  const pass = results.filter(r => r.p).length;
+  document.getElementById("out").textContent =
+    results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+})();
+</script>

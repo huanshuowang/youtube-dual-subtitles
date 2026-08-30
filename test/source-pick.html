@@ -1,0 +1,101 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS source-pick harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  #fake-player { position: relative; width: 420px; height: 236px; background: #222; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+  a { margin-right: 10px; }
+</style>
+
+<h1>Which track does translation-only translate from?</h1>
+<p>
+  <a href="?case=A">A</a><a href="?case=B">B</a><a href="?case=C">C</a>
+  <a href="?case=D">D</a><a href="?case=E">E</a>
+</p>
+<pre id="out">running…</pre>
+<div id="fake-player"><video id="v"></video></div>
+
+<script>
+// content.js is a singleton per page, so each case gets its own page load.
+// Wanted order: human in the original language > any human > machine.
+// The machine track is the tell for the original language — players only
+// auto-generate for the language being spoken.
+const CASES = {
+  A: { why: "Thai video, only a machine Thai track and a human English one",
+       tracks: [{ languageCode: "th", kind: "asr", name: "Thai (auto)" },
+                { languageCode: "en", kind: "",    name: "English" }],
+       want: "en" },
+  B: { why: "same, but a human Thai track exists too — original language wins",
+       tracks: [{ languageCode: "th", kind: "asr", name: "Thai (auto)" },
+                { languageCode: "en", kind: "",    name: "English" },
+                { languageCode: "th", kind: "",    name: "Thai" }],
+       want: "th" },
+  C: { why: "nothing but machine transcription",
+       tracks: [{ languageCode: "th", kind: "asr", name: "Thai (auto)" }],
+       want: "th(asr)" },
+  D: { why: "no machine track at all, so no way to know the original language",
+       tracks: [{ languageCode: "en", kind: "", name: "English" },
+                { languageCode: "fr", kind: "", name: "French" }],
+       want: "en" },
+  E: { why: "human original listed last — order in the list must not decide it",
+       tracks: [{ languageCode: "en", kind: "",    name: "English" },
+                { languageCode: "fr", kind: "",    name: "French" },
+                { languageCode: "ja", kind: "asr", name: "Japanese (auto)" },
+                { languageCode: "ja", kind: "",    name: "Japanese" }],
+       want: "ja" }
+};
+const CASE = new URLSearchParams(location.search).get("case") || "A";
+const SPEC = CASES[CASE];
+
+const STORE = { ydsSettings: { enabled: true, secondLang: "zh-Hans", uiLang: "auto",
+                               bottomOffset: 20, fontSize: 22, color: "#ffffff",
+                               background: "rgba(0,0,0,0.6)", translationProvider: "google",
+                               translationOnly: true, apiKeys: {} } };
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener() {} }, lastError: null },
+  i18n: { getUILanguage: () => "en-US" },
+  storage: { sync: { get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+                     set: (o, cb) => { Object.assign(STORE, o); cb && cb(); } },
+             onChanged: { addListener() {} } }
+};
+window.__asked = [];
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script>
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    setTimeout(() => ctx.onTrackList(SPEC.tracks), 0);
+    return {
+      id: "mock", requiresCcForTracks: true,
+      looksLikeVideoPage: () => true,
+      getVideoId: () => "mock-1",
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("fake-player"),
+      isCcOn: () => false,                        // captions closed
+      nativeLines: () => [], nativeCaptionWidth: () => 0,
+      observeTarget: () => document.getElementById("fake-player"),
+      start() {}, forgetLoadedCues() {}, reset() {},
+      requestTrack(t) { window.__asked.push(`${t.languageCode}${t.kind === "asr" ? "(asr)" : ""}`); }
+    };
+  }
+};
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+setTimeout(() => {
+  const got = window.__asked[0] || "(nothing)";
+  const pass = got === SPEC.want;
+  document.getElementById("out").textContent =
+    `case ${CASE}: ${SPEC.why}\n` +
+    `offered:  ${SPEC.tracks.map(t => t.languageCode + (t.kind === "asr" ? "(asr)" : "")).join(", ")}\n` +
+    `want:     ${SPEC.want}\n` +
+    `asked:    ${got}\n\n` +
+    (pass ? "PASS" : "FAIL");
+  window.__result = { case: CASE, want: SPEC.want, got, pass };
+}, 2500);
+</script>

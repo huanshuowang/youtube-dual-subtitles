@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HappySubs — 让 YouTube 同时显示两种语言字幕</title>
-  <meta name="description" content="在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。" />
+  <title>HappySubs — YouTube / Vimeo / B站 双语字幕与实时听译</title>
+  <meta name="description" content="在 YouTube、Vimeo、B站 上同时显示两种语言的字幕；没有字幕的视频还能实时听译。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。" />
   <link rel="icon" type="image/png" href="icons/icon48.png" />
 
   <style>
@@ -105,6 +105,29 @@
       border: 1px solid var(--border);
     }
     .cta-secondary:hover { background: var(--bg-elev); text-decoration: none; }
+    /* Setup commands for the live-transcription service. */
+    pre.cmd {
+      background: #1e1e1e;
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 8px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #e6e6e6;
+      margin: 12px 0;
+    }
+    .features-2 {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    .live-note {
+      border-left: 2px solid var(--border);
+      padding-left: 14px;
+      color: var(--text-dim);
+      font-size: 14px;
+      margin: 20px 0 0;
+    }
     .version-pill {
       display: inline-flex;
       align-items: center;
@@ -121,9 +144,15 @@
     .preview {
       margin: 60px auto 0;
       max-width: 780px;
-      background: linear-gradient(180deg, #000 0%, #111 100%);
+      /* A still frame's worth of picture. The whole point is that these are
+         subtitles sitting ON a video — against a black panel the black caption
+         boxes vanish and there is nothing to see. */
+      background:
+        radial-gradient(ellipse at 30% 25%, #6f7f95 0%, transparent 55%),
+        radial-gradient(ellipse at 75% 70%, #b9a184 0%, transparent 60%),
+        linear-gradient(160deg, #47536b 0%, #8d7f6d 55%, #55504c 100%);
       border-radius: 12px;
-      padding: 36px 24px;
+      padding: 56px 24px;
       border: 1px solid var(--border);
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
       text-align: center;
@@ -134,14 +163,13 @@
       content: "";
       position: absolute;
       inset: 0;
-      background:
-        radial-gradient(ellipse at center top, rgba(255,0,51,0.12) 0%, transparent 60%),
-        radial-gradient(ellipse at center bottom, rgba(80,80,255,0.06) 0%, transparent 60%);
+      /* Slight vignette, the way a real frame falls off at the edges. */
+      background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.35) 100%);
       pointer-events: none;
     }
     .preview-caption-cn {
       display: inline-block;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0,0,0,0.72);
       padding: 6px 14px;
       border-radius: 4px;
       color: white;
@@ -152,7 +180,7 @@
     }
     .preview-caption-en {
       display: inline-block;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0,0,0,0.72);
       padding: 6px 14px;
       border-radius: 4px;
       color: white;
@@ -315,10 +343,10 @@
 
   <header class="hero">
     <div class="container">
-      <h1 data-en="Dual subtitles for YouTube">YouTube 也能双语字幕</h1>
-      <div class="version-pill">v1.3.1</div>
-      <p class="sub" data-en="Show two subtitle languages on YouTube. Use native captions or free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek translation.">
-        在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。
+      <h1 data-en="Dual subtitles for your videos">为视频添加双语字幕</h1>
+      <div class="version-pill">v2.0.0</div>
+      <p class="sub" data-en="Currently supports YouTube, Vimeo and Bilibili. Uses the video's own subtitles plus free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek AI translation. Videos with no subtitles at all can be transcribed as they play.">
+        目前支持 YouTube、Vimeo 和 Bilibili。使用视频自带字幕 + Google 免费翻译，也可选 Claude / OpenAI / Gemini / DeepSeek AI 翻译。完全没有字幕的视频，可以边播边听译。
       </p>
       <a class="cta" href="https://chromewebstore.google.com/detail/malocefbdblplamcmmmpilepcgllfmnf" target="_blank" rel="noopener" data-en="Add to Chrome">
         添加到 Chrome
@@ -333,8 +361,8 @@
           <div class="preview-caption-en">To be, or not to be, that is the question</div>
         </div>
       </div>
-      <p class="preview-note" data-en="↑ Second-language translation overlaid by the extension · ↓ YouTube's native caption">
-        ↑ 扩展叠加的第二语言翻译 · ↓ YouTube 原生字幕
+      <p class="preview-note" data-en="↑ Second-language translation overlaid by the extension · ↓ the player's own caption">
+        ↑ 扩展叠加的第二语言翻译 · ↓ 播放器原生字幕
       </p>
     </div>
   </header>
@@ -342,17 +370,32 @@
   <section id="features">
     <div class="container">
       <h2 data-en="Why use it">为什么用它</h2>
-      <p class="section-desc" data-en="The rough edges of other YouTube dual-subtitle extensions, fixed.">主流 YouTube 双语扩展的痛点，这里全解决了。</p>
+      <p class="section-desc" data-en="The rough edges of other dual-subtitle extensions, fixed.">主流双语字幕扩展的痛点，这里全解决了。</p>
       <div class="features">
+        <div class="feature">
+          <div class="icon">🎬</div>
+          <h3 data-en="Three platforms">三个平台</h3>
+          <p data-en="The major video platforms — YouTube, Vimeo and Bilibili — all handled by one extension.">支持主流视频平台 YouTube、Vimeo 和 Bilibili，一个扩展全托管。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🎙️</div>
+          <h3 data-en="Live transcription">实时听译</h3>
+          <p data-en="For videos with no subtitle track of their own, live transcription taps the audio, captions it as it plays and translates that. Recognition runs on your own computer — the audio never leaves it, and it is completely free. <a href=&quot;#live&quot;>How to set it up →</a>">对于没有原声字幕轨的视频，通过实时听译抓取音频、边播边转成字幕再翻译。识别在你自己电脑上跑——音频不出本机，也完全免费。 <a href="#live">怎么装 →</a></p>
+        </div>
         <div class="feature">
           <div class="icon">⚡</div>
           <h3 data-en="Zero-lag sync">零延迟同步</h3>
-          <p data-en="Intercepts YouTube's own caption request and translates the whole track upfront, so the second language stays perfectly aligned with the video timeline — no more half-second lag.">截获 YouTube 播放器自己的字幕请求，整片提前翻译，跟视频时间轴精确对齐，不再"中文永远慢半拍"。</p>
+          <p data-en="Grabs the whole caption track and translates it upfront, so the second language stays perfectly aligned with the video timeline — no more half-second lag.">拿到整条字幕轨后提前翻译，跟视频时间轴精确对齐，不再"中文永远慢半拍"。</p>
         </div>
         <div class="feature">
           <div class="icon">🎯</div>
           <h3 data-en="Full-sentence translation">整句翻译</h3>
           <p data-en="Merges the ASR fragments that split a sentence in half before translating, so Google Translate sees the full clause. Translations end up noticeably cleaner than most alternatives.">合并 ASR 把一句话切成两半的碎片再翻译，得到完整语境下的准确译文，翻译质量比同类扩展更好。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">👁️</div>
+          <h3 data-en="Translation only">只看译文</h3>
+          <p data-en="Prefer to read only the translation? Turn on Translation only and the second language shows on its own, with the player's captions closed — and it can stay on for every video you open.">只想看译文？打开「仅显示翻译字幕」，关着播放器字幕也能单独显示第二语言，而且可以设成每个视频都默认开启。</p>
         </div>
         <div class="feature">
           <div class="icon">🖱️</div>
@@ -398,9 +441,9 @@
         <div class="step">
           <div class="num">2</div>
           <div class="body">
-            <h3 data-en="Open a YouTube video and turn on CC">打开视频并开启原生字幕</h3>
-            <p data-en="On any YouTube video, click the <kbd>CC</kbd> button at the bottom-right to turn on native captions (in the language you want to learn).">
-              打开任意 YouTube 视频，点右下角的 <kbd>CC</kbd> 按钮，开启原生字幕（你想学的那种语言）。
+            <h3 data-en="Open a video">打开视频</h3>
+            <p data-en="On YouTube, click the <kbd>CC</kbd> button to turn on native captions (in the language you want to learn) — the extension needs them. On Vimeo and Bilibili it reads the subtitle track directly, so captions are optional there. If a video has no subtitles at all, use <a href=&quot;#live&quot;>live transcription</a>.">
+              YouTube 上点右下角的 <kbd>CC</kbd> 按钮开启原生字幕（你想学的那种语言），扩展要靠它拿字幕。Vimeo 和 B站 上扩展直接读字幕轨，字幕开不开都行。完全没有字幕的视频，用<a href="#live">实时听译</a>。
             </p>
           </div>
         </div>
@@ -415,8 +458,44 @@
         </div>
       </div>
 
-      <p class="section-desc" style="margin-top:2rem" data-en='Can&apos;t reach the Chrome Web Store? <a href="happysubs-1.3.1.zip" download>Download the .zip</a>, unzip it, then load the <code>happysubs</code> folder via <code>chrome://extensions</code> → Developer mode → Load unpacked.'>
-        打不开 Chrome 应用商店？<a href="happysubs-1.3.1.zip" download>下载 .zip</a> 解压后，在 <code>chrome://extensions</code> 打开开发者模式，点"加载已解压的扩展"，选 <code>happysubs</code> 文件夹即可。
+      <p class="section-desc" style="margin-top:2rem" data-en='Prefer to build it yourself? The full source is on <a href="https://github.com/huanshuowang/happysubs" target="_blank" rel="noopener">GitHub</a> — clone it and load the folder via <code>chrome://extensions</code> → Developer mode → Load unpacked.'>
+        想自己装？完整源码在 <a href="https://github.com/huanshuowang/happysubs" target="_blank" rel="noopener">GitHub</a> 上，clone 下来后在 <code>chrome://extensions</code> 打开开发者模式，点"加载已解压的扩展"选这个文件夹即可。
+      </p>
+    </div>
+  </section>
+
+
+  <section id="live">
+    <div class="container">
+      <h2 data-en="Live transcription">实时听译</h2>
+      <p class="section-desc" data-en="Creates subtitles for videos that have no subtitle track at all. Optional, and currently Chinese and English.">为完全没有字幕轨的视频创造字幕。可选功能，目前支持中英双语。</p>
+
+      <div class="features features-2">
+        <div class="feature">
+          <div class="icon">🔒</div>
+          <h3 data-en="Runs on your machine">在你自己电脑上跑</h3>
+          <p data-en="Recognition happens in a small local service you install and run. The audio never leaves your computer, and there is no per-minute billing.">识别跑在你自己装的一个本地小服务里。音频不出本机，也没有按分钟计费。</p>
+        </div>
+        <div class="feature">
+          <div class="icon">🗣️</div>
+          <h3 data-en="Chinese and English">中英双语</h3>
+          <p data-en="A bilingual streaming model: Chinese speech comes out Chinese, English comes out English, and code-switching within one sentence is handled too.">中英双语流式模型：中文出中文，英文出英文，一句话里中英混说也认得。</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:36px" data-en="Install the local service">安装本地识别服务</h3>
+      <p data-en="Needs python3 on your system. One command, no clone — it creates a happysubs-server folder here, builds the Python environment, and downloads the model from the sherpa-onnx project's own release (about 500MB compressed, 193MB kept).">需要系统装有 python3。一条命令，不用 clone 仓库——脚本会在当前位置建一个 <code>happysubs-server</code> 文件夹，装好 Python 环境，并从 sherpa-onnx 项目自己的 release 下载模型（约 500MB 压缩包，解压后保留 193MB）。</p>
+
+      <pre class="cmd">curl -fsSL https://raw.githubusercontent.com/huanshuowang/happysubs/main/setup.sh | bash</pre>
+
+      <p data-en="Then start it, and leave it running while you watch:">装好后启动它，看视频期间让它一直开着：</p>
+
+      <pre class="cmd">cd happysubs-server &amp;&amp; .venv/bin/python server.py</pre>
+
+      <p data-en="When it prints 监听 ws://127.0.0.1:8765 it is ready. In the extension popup, switch to the Live transcribe tab and press start.">看到 <code>监听 ws://127.0.0.1:8765</code> 就绪。然后在插件弹窗切到「实时听译」标签，点开启。</p>
+
+      <p class="live-note" data-en="Notes: press play on the video first — browsers only allow audio processing after you interact with the page. The service handles one page at a time, so several tabs will fight over it. Port already in use: run lsof -ti:8765 | xargs kill and start again. The model and Python environment live in that folder; on a new machine just run the command again. If you have cloned the whole repository, running ./setup.sh from its root does the same thing.">
+        几点注意：先点一下视频<strong>播放</strong>，浏览器要求有用户交互才允许处理音频。服务端一次只服务一个页面，同时开多个标签页会互相干扰。端口被占用时执行 <code>lsof -ti:8765 | xargs kill</code> 再重启。模型和 Python 环境都在这个文件夹里，换机器重跑一次上面那条命令即可。已经 clone 了整个仓库的话，在仓库根目录跑 <code>./setup.sh</code> 效果一样。
       </p>
     </div>
   </section>
@@ -424,24 +503,27 @@
   <section id="changelog">
     <div class="container">
       <h2 data-en="Changelog">更新日志</h2>
-      <p class="section-desc" data-en="The extension UI now speaks your language.">插件界面现在会说你的语言。</p>
-      <div class="features">
-        <div class="feature">
-          <div class="icon">🌐</div>
-          <h3 data-en="Auto-localized interface">界面自动本地化</h3>
-          <p data-en="The popup, on-page prompts, and store description now follow your browser's language automatically — Chinese for zh-* browsers, English for everyone else. No language setting needed.">插件弹窗、页面内提示和商店描述会自动跟随浏览器语言：中文浏览器显示中文，其他显示英文，无需任何设置。</p>
-        </div>
-        <div class="feature">
-          <div class="icon">🎯</div>
-          <h3 data-en="Smarter default language">更聪明的默认语言</h3>
-          <p data-en="The default second-subtitle language is now inferred from your browser language (e.g. Traditional Chinese, Japanese, Portuguese) instead of always starting in Simplified Chinese.">默认第二字幕语言不再固定为简体中文，而是根据浏览器语言自动推断（如繁体中文、日语、葡萄牙语等）。</p>
-        </div>
-        <div class="feature">
-          <div class="icon">🤖</div>
-          <h3 data-en="From 1.2.0: optional AI translation">1.2.0 起：可选 AI 翻译</h3>
-          <p data-en="Claude / OpenAI / Gemini / DeepSeek remain available alongside native captions and free Google Translate, with manual confirmation before any paid API call.">继续支持 Claude / OpenAI / Gemini / DeepSeek 翻译源，付费 API 仍需手动确认后才会调用。</p>
-        </div>
-      </div>
+      <p class="section-desc" data-en="The published version is 1.3.1; everything since is 2.0.0.">商店上架的是 1.3.1，之后的改动都归在 2.0.0。</p>
+
+      <details open>
+        <summary data-en="2.0.0 — Bilibili, live transcription, Vimeo">2.0.0 — B 站、实时听译、Vimeo</summary>
+        <p data-en="<strong>Bilibili.</strong> Subtitle tracks are pulled straight from Bilibili's own API, so the whole translation stack applies to them: four AI translators alongside free Google, human tracks preferred over AI-generated ones, and translation-only mode. Playlists, bangumi and festival pages are covered too."><strong>B 站。</strong>字幕轨直接从 B 站自家 API 拉取，所以整套翻译能力都能用上：Google 免费翻译之外还有四个 AI 翻译源、人工字幕优先于 AI 字幕、仅翻译模式。播放列表、番剧、festival 页面也都支持。</p>
+        <p data-en="<strong>Live transcription.</strong> For videos with no subtitle track at all. Taps the audio, captions it as it plays and translates that, with recognition running on your own machine. <a href=&quot;#live&quot;>Setup guide →</a>"><strong>实时听译。</strong>给完全没有字幕轨的视频用。抓取音频、边播边转成字幕再翻译，识别跑在你自己电脑上。<a href="#live">安装说明 →</a></p>
+        <p data-en="<strong>Vimeo.</strong> Watch pages, the player on player.vimeo.com, and Vimeo players embedded in other sites. Vimeo hands over its subtitle track directly, so captions do not have to be turned on first."><strong>Vimeo。</strong>观看页、player.vimeo.com 播放器、以及嵌在第三方网站里的 Vimeo 播放器。Vimeo 会直接把字幕轨给我们，所以不用先开字幕。</p>
+        <p data-en="<strong>Translation-only mode.</strong> By default the second language follows the player: no captions, no overlay. Turn this on and it shows on its own, with the player's captions closed."><strong>仅显示翻译字幕。</strong>默认第二字幕跟随播放器：不开原生字幕就不显示。打开这个开关后，关着播放器字幕也能单独显示译文。</p>
+        <p data-en="<strong>Settings page.</strong> Pin the panel language to Chinese or English instead of following the browser, and set the defaults every video starts with."><strong>设置页。</strong>可以把面板语言固定成中文或英文，不再只能跟随浏览器；也能设置每个视频打开时的默认状态。</p>
+        <p data-en="<strong>Subtitle layout.</strong> The translated line now wraps at about the same width as the original instead of folding onto an extra line, and there is a subtitle-width setting for when there is no original to match."><strong>字幕排版。</strong>译文的行宽会向原文对齐，不再出现原文一行、译文折成两三行；没有原文可对齐时另有「字幕宽度」可调。</p>
+      </details>
+
+      <details>
+        <summary data-en="1.3.0 — auto-localized interface">1.3.0 — 界面自动本地化</summary>
+        <p data-en="The popup, on-page prompts and store description follow your browser's language automatically — Chinese for zh-* browsers, English for everyone else.">插件弹窗、页面内提示和商店描述会自动跟随浏览器语言：中文浏览器显示中文，其他显示英文。</p>
+      </details>
+
+      <details>
+        <summary data-en="1.2.0 — optional AI translation">1.2.0 — 可选 AI 翻译</summary>
+        <p data-en="Claude / OpenAI / Gemini / DeepSeek alongside native captions and free Google Translate, with manual confirmation before any paid API call.">在视频自带字幕和 Google 免费翻译之外，加入 Claude / OpenAI / Gemini / DeepSeek，付费 API 需手动确认后才会调用。</p>
+      </details>
     </div>
   </section>
 
@@ -451,12 +533,20 @@
       <p class="section-desc"></p>
 
       <details>
-        <summary data-en="Why do I have to turn on YouTube's native CC?">为什么必须打开 YouTube 原生 CC 字幕？</summary>
-        <p data-en="Because the extension works by intercepting YouTube's own caption request. YouTube only fires that request when CC is on — that's how we get the full caption data to translate.">因为扩展需要拦截 YouTube 播放器自己去拿字幕的请求。YouTube 只在你开 CC 的时候才发这个请求，我们才能拿到完整的字幕数据来翻译。</p>
+        <summary data-en="Why do I have to turn on CC on YouTube but not on Vimeo?">为什么 YouTube 必须开 CC，Vimeo 却不用？</summary>
+        <p data-en="On YouTube the extension works by intercepting the player's own caption request, and YouTube only fires that request when CC is on. Vimeo publishes its subtitle tracks as ordinary files the extension can read on its own, so nothing needs turning on first. If you only want the translation, turn on <strong>Translation only</strong> in the popup — the second language then shows on its own with the player's captions closed.">YouTube 上扩展是靠拦截播放器自己去拿字幕的请求，而 YouTube 只在你开 CC 的时候才发这个请求。Vimeo 则是把字幕轨当普通文件放出来，扩展可以自己去读，所以不需要先开任何东西。如果你只想看译文，在插件弹窗里打开 <strong>仅显示翻译字幕</strong>，关着 CC 也会单独显示第二语言。</p>
+      </details>
+      <details>
+        <summary data-en="Do I have to install anything for Bilibili?">B 站需要装什么吗？</summary>
+        <p data-en="No. Bilibili subtitle tracks are read straight from the site, the same as everywhere else. The local service is only for live transcription, and only for videos that have no subtitle track at all.">不需要。B 站的字幕轨跟其他平台一样直接读取。本地服务只跟实时听译有关，而实时听译只用于完全没有字幕轨的视频。</p>
+      </details>
+      <details>
+        <summary data-en="Bilibili says this video has no subtitles — is that right?">B 站上提示这个视频没有字幕，是真的吗？</summary>
+        <p data-en="Probably. Bilibili only lists subtitle tracks to signed-in viewers, so signing in is worth checking first. If you are signed in and the extension still finds nothing, the video genuinely has none — that is what live transcription is for.">多半是。B 站只对**登录用户**返回字幕列表，所以先确认你登录了。如果已经登录、扩展仍然找不到，那就是真的没有——这正是实时听译存在的理由。</p>
       </details>
       <details>
         <summary data-en="What if the video has no captions?">如果视频没有字幕怎么办？</summary>
-        <p data-en="Most YouTube videos have auto-generated (ASR) captions. If a video really has none at all, the extension can't invent them out of thin air — no workaround for now.">YouTube 上大部分视频有自动生成（ASR）字幕。真的一点都没有的视频，扩展没法凭空生成字幕，这种情况暂时无解。</p>
+        <p data-en="On YouTube and Vimeo most videos have auto-generated captions. On Bilibili most have none, which is what <a href=&quot;#live&quot;>live transcription</a> is for — it listens to the audio and writes the subtitles itself.">YouTube 和 Vimeo 上大部分视频有自动生成字幕。B 站上大部分**没有**，这正是<a href="#live">实时听译</a>的用武之地——它直接听音频，自己把字幕写出来。</p>
       </details>
       <details>
         <summary data-en="How accurate is the translation?">翻译准确吗？</summary>
@@ -479,12 +569,12 @@
     (function () {
       const STORAGE_KEY = "yds-site-lang";
       const TITLES = {
-        zh: "HappySubs — 让 YouTube 同时显示两种语言字幕",
-        en: "HappySubs — Dual Subtitles for YouTube"
+        zh: "HappySubs — YouTube / Vimeo / B站 双语字幕与实时听译",
+        en: "HappySubs — Dual Subtitles & Live Captions"
       };
       const DESCRIPTIONS = {
-        zh: "在 YouTube 上同时显示两种语言的字幕。使用自带字幕或Google免费翻译，支持使用Claude / OpenAI / Gemini / DeepSeek 翻译。",
-        en: "Show two subtitle languages on YouTube. Use native captions or free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek translation."
+        zh: "在 YouTube、Vimeo、B站 上同时显示两种语言的字幕；没有字幕的视频还能实时听译。",
+        en: "Two subtitle languages at once on YouTube, Vimeo and Bilibili — plus live transcription for videos with no captions at all."
       };
       const TOGGLE_LABEL = { zh: "EN", en: "中" };
 

@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS drag harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<style>
+  body { font: 14px/1.5 -apple-system, sans-serif; margin: 16px; }
+  #fake-player { position: relative; width: 640px; height: 360px; background: #222; }
+  /* Stands in for YouTube's control chrome: a dense pile of hoverable
+     elements over the video, so moving toward the handle fires a storm of
+     mouseleave events the way it does on a real player. */
+  #chrome { position: absolute; left: 0; right: 0; bottom: 0; height: 48px;
+            display: flex; gap: 4px; align-items: center; padding: 0 8px; z-index: 60; }
+  #chrome i { display: block; width: 28px; height: 28px; background: #555; border-radius: 4px; }
+  /* Stands in for Vimeo's .vp-target: a full-bleed mouse capture layer that
+     paints above the video but below our overlay. */
+  #target-layer { position: absolute; inset: 0; z-index: 50; }
+  pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
+</style>
+
+<h1>YDS drag harness</h1>
+<pre id="out">move the mouse over the subtitle, then drag the ↕ handle</pre>
+
+<div id="fake-player">
+  <video id="v"></video>
+  <div id="target-layer"></div>
+  <div id="chrome"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <!-- stands in for the player's own caption line, whose width we match -->
+  <div id="native-cap" style="position:absolute;left:50%;transform:translateX(-50%);bottom:12%;
+       color:#fff;background:#000;font:18px sans-serif;white-space:nowrap;z-index:55;">
+    a native caption line of some particular width
+  </div>
+</div>
+
+<script>
+const STORE = { ydsSettings: { enabled: true, secondLang: "en", bottomOffset: 20, fontSize: 22,
+                               color: "#ffffff", background: "rgba(0,0,0,0.6)",
+                               translationProvider: "google", apiKeys: {} } };
+window.__writes = [];
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener() {} }, lastError: null },
+  storage: {
+    sync: {
+      get: (k, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+      set: (obj, cb) => { Object.assign(STORE, obj); window.__writes.push(JSON.parse(JSON.stringify(obj))); cb && cb(); }
+    },
+    onChanged: { addListener() {} }
+  }
+};
+
+// Count play/pause-style clicks reaching the layers under our overlay, the way
+// a real player's own handlers would.
+window.__targetClicks = 0;
+window.__targetMousedowns = 0;
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script>
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    setTimeout(() => {
+      ctx.onTrackList([{ languageCode: "en", kind: "", name: "English" }]);
+      const cueText = new URLSearchParams(location.search).get("cue") || "a subtitle line to grab";
+      ctx.ingest({ cues: [{ start: 0, end: 9999, text: cueText }],
+                   lang: "en", isAsr: false, isNativeTarget: true, key: "mock" });
+    }, 0);
+    return {
+      id: "mock", requiresCcForTracks: false,
+      looksLikeVideoPage: () => true,
+      getVideoId: () => "mock-1",
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("fake-player"),
+      isCcOn: () => true,
+      nativeLines: () => [],
+      nativeCaptionWidth: () => {
+        const n = document.getElementById("native-cap");
+        return n && !n.hidden ? n.getBoundingClientRect().width : 0;
+      },
+      observeTarget: () => document.getElementById("fake-player"),
+      start() {}, requestTrack() {}, forgetLoadedCues() {}, reset() {}
+    };
+  }
+};
+// rAF does not fire in a pane that never paints; drive the render loop by timer.
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+// Registered AFTER content.js, mimicking a player whose handlers load late.
+document.getElementById("target-layer").addEventListener("click", () => window.__targetClicks++);
+document.getElementById("target-layer").addEventListener("mousedown", () => window.__targetMousedowns++);
+document.addEventListener("click", () => window.__targetClicks++, true);
+
+function readout() {
+  const o = document.querySelector("#yt-dual-sub-overlay");
+  const h = o && o.querySelector(".yds-drag-handle");
+  return {
+    overlay: !!o,
+    bottom: o ? o.style.bottom : null,
+    handleVisible: h ? h.classList.contains("yds-drag-visible") : null,
+    handleOpacity: h ? getComputedStyle(h).opacity : null,
+    dragging: o ? o.classList.contains("yds-dragging") : null,
+    outline: o ? getComputedStyle(o).outlineStyle + " " + getComputedStyle(o).outlineWidth : null,
+    maxWidth: o ? o.style.maxWidth : null,
+    nativeWidth: Math.round(document.getElementById("native-cap").getBoundingClientRect().width),
+    overlayWidth: o ? Math.round(o.getBoundingClientRect().width) : null,
+    targetClicks: window.__targetClicks,
+    writes: window.__writes.length
+  };
+}
+window.__readout = readout;
+setInterval(() => { document.getElementById("out").textContent = JSON.stringify(readout(), null, 1); }, 200);
+</script>

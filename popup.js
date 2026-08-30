@@ -5,10 +5,13 @@ const DEFAULTS = {
   enabled: true,
   secondLang: ydsDefaultSecondLang(),
   bottomOffset: 22,
+  captionWidth: 60,
   fontSize: 22,
   color: "#ffffff",
   background: "rgba(0,0,0,0.6)",
   translationProvider: "google",
+  uiLang: "auto",
+  translationOnly: false,
   paidApiAskEachVideo: false,
   apiKeys: {}
 };
@@ -37,7 +40,7 @@ const PROVIDER_NAMES = {
   get native() { return ydsT("providerNative"); }
 };
 
-// Swap static popup text to the browser's UI language.
+// Swap static popup text to the active UI language (see ydsSetUiLang).
 function localizeStaticDom() {
   for (const el of document.querySelectorAll("[data-i18n]")) {
     el.textContent = ydsT(el.dataset.i18n);
@@ -65,10 +68,43 @@ function alphaToBg(a) {
   return `rgba(0,0,0,${v.toFixed(2)})`;
 }
 
-async function getActiveYouTubeTab() {
+const SUPPORTED_URL = /^https?:\/\/(www\.youtube\.com|(player\.)?vimeo\.com|www\.bilibili\.com)\//;
+
+// Info from the last probe in getActiveSupportedTab, so we don't message the
+// page twice on open.
+let probedInfo = null;
+
+async function getActiveSupportedTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url || !/^https?:\/\/www\.youtube\.com\//.test(tab.url)) return null;
-  return tab;
+  if (!tab) return null;
+  activeTabUrl = tab.url || "";
+  if (tab.url && SUPPORTED_URL.test(tab.url)) return tab;
+  // A YouTube/Vimeo player embedded in someone else's page — a course site, a
+  // blog. The tab's own URL is not ours, but the content script is alive in the
+  // player's frame and answers, so ask before giving up.
+  probedInfo = await askContent(tab.id);
+  return probedInfo && probedInfo.videoId ? tab : null;
+}
+
+// The content script reports which adapter booted; fall back to YouTube so a
+// page we can't reach still reads sensibly.
+const PLATFORM_NAMES = { youtube: "YouTube", vimeo: "Vimeo", bilibili: "Bilibili" };
+
+// The tab we last found, so a name is still available when the page never
+// answered — which is exactly when we most need to name it, since "refresh the
+// YouTube page" on a Bilibili tab is worse than saying nothing.
+let activeTabUrl = "";
+
+function platformFromUrl(url) {
+  if (/^https?:\/\/(www\.)?bilibili\.com\//.test(url || "")) return "bilibili";
+  if (/^https?:\/\/(player\.)?vimeo\.com\//.test(url || "")) return "vimeo";
+  if (/^https?:\/\/(www\.)?youtube\.com\//.test(url || "")) return "youtube";
+  return "";
+}
+
+function platformName(info) {
+  const id = (info && info.platform) || platformFromUrl(activeTabUrl);
+  return PLATFORM_NAMES[id] || "YouTube";
 }
 
 async function askContent(tabId) {
@@ -329,6 +365,7 @@ function applyProviderUI(settings) {
   $("paidControls").style.display = needsKey ? "block" : "none";
   $("askPaidRow").style.display = needsKey ? "flex" : "none";
   $("askPaidApi").checked = !!settings.paidApiAskEachVideo;
+  $("translationOnly").checked = !!settings.translationOnly;
   if (needsKey) {
     const keys = settings.apiKeys || {};
     const key = keys[p] || "";
@@ -363,7 +400,16 @@ function providerName(provider) {
 
 function statusTextFor(info, tab) {
   if (!tab) return ydsT("statusNoTab");
-  if (!info || !info.videoId) return ydsT("statusNoComm");
+  if (!info || !info.videoId) return ydsT("statusNoComm", { platform: platformName(info) });
+
+  // Live transcription owns the overlay while it runs, so every message below
+  // would be describing a subtitle track the viewer isn't looking at — saying
+  // "no subtitles picked up yet" while captions are visibly on screen.
+  if (info.live && info.live.active) {
+    if (info.live.status === "connecting") return ydsT("liveConnecting");
+    if (info.live.status === "listening") return ydsT("statusLiveRunning");
+    return ydsT("liveUnavailable");
+  }
 
   const st = info.translationStatus || {};
   if (st.mode === "native" || info.usingNativeTrack) {
@@ -400,8 +446,23 @@ function statusTextFor(info, tab) {
     });
   }
   if (info.nativeCaptionText) {
-    return ydsT("statusDetected");
+    return ydsT("statusDetected", { platform: platformName(info) });
   }
+  // In translation-only mode the CC prompt would be wrong — that's the whole
+  // point of the mode. But if we still have no subtitles, say so plainly and
+  // give the one workaround that always works.
+  if ($("translationOnly").checked) {
+    return info.preCuesLoaded ? ydsT("statusTranslationOnly") : ydsT("statusTranslationOnlyNeedsCc");
+  }
+  // Vimeo and Bilibili hand us the track without the player's help, so their
+  // caption switch is optional — but on Bilibili "no track" is common enough
+  // to be worth naming, along with the sign-in caveat behind it.
+  if (info.platform === "bilibili") {
+    return (info.tracks && info.tracks.length)
+      ? ydsT("statusBilibiliReading")
+      : ydsT("statusBilibiliNoTrack");
+  }
+  if (info.platform === "vimeo") return ydsT("statusVimeoReading");
   return ydsT("statusTurnOnCC");
 }
 
@@ -432,14 +493,93 @@ function startStatusPolling() {
   }, 1000);
 }
 
+
+// ---------- tabs + live transcription ----------
+
+const SETUP_URL = "https://huanshuowang.com/happysubs/#live";
+
+function selectTab(which) {
+  const live = which === "live";
+  $("tabLive").setAttribute("aria-selected", String(live));
+  $("tabTranslate").setAttribute("aria-selected", String(!live));
+  $("panelLive").hidden = !live;
+  $("panelTranslate").hidden = live;
+  try { localStorage.setItem("yds-popup-tab", which); } catch {}
+}
+
+// The live panel says one of three things: what the feature is (before you
+// start), how it is going (once running), or what went wrong — with the setup
+// link attached whenever the answer is "the recogniser isn't there".
+function renderLivePanel(info) {
+  const st = (info && info.live) || { active: false, status: "stopped" };
+  const running = !!st.active;
+  $("liveToggle").textContent = ydsT(running ? "liveStop" : "liveStart");
+
+  let msg;
+  let showSetup = false;
+  if (!running) {
+    msg = ydsT("liveIdle");
+    showSetup = true;
+  } else if (st.status === "connecting") {
+    msg = ydsT("liveConnecting");
+  } else if (st.status === "listening") {
+    msg = ydsT("liveListening");
+    // Worth saying: a track was found, so the transcription is sitting idle.
+    if (info && info.preCuesLoaded) msg += " " + ydsT("liveHasTrack");
+  } else {
+    msg = ydsT("liveUnavailable");
+    showSetup = true;
+  }
+
+  const el = $("liveStatus");
+  el.textContent = msg;
+  if (showSetup) {
+    el.appendChild(document.createTextNode(" "));
+    const a = document.createElement("a");
+    a.href = SETUP_URL;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = ydsT("liveSetupLink");
+    el.appendChild(a);
+  }
+}
+
+const LIVE_ERRORS = {
+  "no-video": "liveNoVideo",
+  "capture-failed": "liveCaptureFailed",
+  "no-platform": "liveNoVideo"
+};
+
+async function toggleLive(info) {
+  if (!activeTabId) return;
+  const running = !!(info && info.live && info.live.active);
+  const res = await sendContent(activeTabId, { type: running ? "YDS_LIVE_STOP" : "YDS_LIVE_START" });
+  if (res && res.ok === false) {
+    $("liveStatus").textContent = ydsT(LIVE_ERRORS[res.error] || "liveUnavailable");
+    return;
+  }
+  // Give the socket a moment to land on connected-or-not before re-reading.
+  setTimeout(async () => {
+    const fresh = await askContent(activeTabId);
+    renderLivePanel(fresh);
+  }, 600);
+  renderLivePanel({ live: { active: !running, status: running ? "stopped" : "connecting" } });
+}
+
 async function init() {
-  localizeStaticDom();
   const stored = (await chrome.storage.sync.get(["ydsSettings"])).ydsSettings || {};
   const settings = { ...DEFAULTS, ...stored };
+
+  // Panel language before anything is painted. Localizing first and reading the
+  // setting afterwards would flash the browser-default language on every open.
+  ydsSetUiLang(settings.uiLang);
+  localizeStaticDom();
 
   $("enabled").checked = !!settings.enabled;
   $("bottomOffset").value = settings.bottomOffset;
   $("bottomOffsetVal").textContent = `${settings.bottomOffset}%`;
+  $("captionWidth").value = settings.captionWidth;
+  $("captionWidthVal").textContent = `${settings.captionWidth}%`;
   $("fontSize").value = settings.fontSize;
   $("color").value = settings.color;
   $("bgAlpha").value = bgToAlpha(settings.background);
@@ -447,10 +587,10 @@ async function init() {
   $("askPaidApi").checked = !!settings.paidApiAskEachVideo;
   applyProviderUI(settings);
 
-  const tab = await getActiveYouTubeTab();
+  const tab = await getActiveSupportedTab();
   activeTabId = tab ? tab.id : null;
-  let info = null;
-  if (tab) info = await askContent(tab.id);
+  let info = probedInfo;
+  if (tab && !info) info = await askContent(tab.id);
 
   populateLanguages(info);
   $("lang").value = settings.secondLang || "";
@@ -461,14 +601,34 @@ async function init() {
     $("videoInfo").textContent = info.videoId;
   }
   $("status").textContent = statusTextFor(info, tab);
+  renderLivePanel(info);
+  let savedTab = "translate";
+  try { savedTab = localStorage.getItem("yds-popup-tab") || "translate"; } catch {}
+  selectTab(savedTab);
   if (info?.translationStatus?.mode === "translating") startStatusPolling();
 
   $("enabled").addEventListener("change", (e) => save({ enabled: e.target.checked }));
+  $("tabTranslate").addEventListener("click", () => selectTab("translate"));
+  $("tabLive").addEventListener("click", () => selectTab("live"));
+  $("liveToggle").addEventListener("click", async () => {
+    const fresh = activeTabId ? await askContent(activeTabId) : null;
+    toggleLive(fresh);
+  });
+
+  $("translationOnly").addEventListener("change", async (e) => {
+    await save({ translationOnly: e.target.checked });
+    refreshStatusSoon(300);
+  });
   $("lang").addEventListener("change", async (e) => {
     await save({ secondLang: e.target.value });
     $("status").textContent = ydsT("statusLangSwitched");
     refreshStatusSeries();
     startStatusPolling();
+  });
+  $("captionWidth").addEventListener("input", (e) => {
+    const v = Number(e.target.value);
+    $("captionWidthVal").textContent = `${v}%`;
+    save({ captionWidth: v });
   });
   $("bottomOffset").addEventListener("input", (e) => {
     const v = parseInt(e.target.value, 10) || 0;

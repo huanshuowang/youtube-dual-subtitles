@@ -12,6 +12,18 @@
       font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     h1 { font-size: 14px; margin: 0 0 10px; }
+    .tabs { display: flex; gap: 4px; margin: 10px 0 12px; border-bottom: 1px solid rgba(128,128,128,0.3); }
+    .tabs button {
+      flex: 1 1 0; padding: 7px 6px; font: inherit; cursor: pointer;
+      background: transparent; border: 0; border-bottom: 2px solid transparent;
+      color: inherit; opacity: 0.6;
+    }
+    .tabs button[aria-selected="true"] { opacity: 1; font-weight: 600; border-bottom-color: currentColor; }
+    .panel[hidden] { display: none; }
+    .liveStatus { font-size: 12px; opacity: 0.75; margin: 8px 0; line-height: 1.5; }
+    .scopeNote { font-size: 12px; opacity: 0.62; line-height: 1.5; margin: 0 0 8px; }
+    .liveStatus a { color: inherit; }
+    #liveToggle { width: 100%; padding: 9px; font: inherit; cursor: pointer; }
     .row { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; gap: 8px; }
     .row label { flex: 0 0 auto; }
     .row select, .row input[type="color"], .row input[type="number"], .row input[type="password"], .row input[type="text"] {
@@ -67,6 +79,25 @@
     <span class="muted" id="videoInfo"></span>
   </div>
 
+  <div class="tabs" role="tablist">
+    <button type="button" id="tabTranslate" role="tab" aria-selected="true" data-i18n="tabTranslate">直接翻译</button>
+    <button type="button" id="tabLive" role="tab" aria-selected="false" data-i18n="tabLive">实时听译</button>
+  </div>
+
+  <div class="panel" id="panelLive" hidden>
+    <div class="scopeNote" data-i18n="liveScope">三个平台都能用；主要是给 B站——那里大部分视频没有字幕轨。需要先装本地识别服务。</div>
+    <button type="button" id="liveToggle" data-i18n="liveStart">开启实时听译</button>
+    <div class="liveStatus" id="liveStatus"></div>
+  </div>
+
+  <div class="panel" id="panelTranslate">
+
+  <div class="scopeNote" data-i18n="translateScope">支持 YouTube、Vimeo、B站，包括嵌在其他网站里的 Vimeo 播放器。</div>
+
+  <div class="row">
+    <label class="switch"><input type="checkbox" id="translationOnly" /> <span data-i18n="translationOnly">仅显示翻译字幕（不用开原生字幕）</span></label>
+  </div>
+
   <div class="row">
     <label for="lang" data-i18n="secondLanguage">第二语言</label>
     <select id="lang"></select>
@@ -101,13 +132,23 @@
     <label class="switch"><input type="checkbox" id="askPaidApi" /> <span data-i18n="askEachVideo">每次打开视频自动询问是否使用付费 API</span></label>
   </div>
 
+  </div><!-- /panelTranslate -->
+
   <hr />
+  <!-- Everything below applies to both tabs: one overlay, one set of styling. -->
 
   <div class="row">
     <label for="bottomOffset" data-i18n="verticalPosition">垂直位置</label>
     <input type="range" id="bottomOffset" min="0" max="90" step="1" />
     <span class="muted" id="bottomOffsetVal" style="flex:0 0 auto; min-width:36px; text-align:right;"></span>
   </div>
+
+  <div class="row">
+    <label for="captionWidth" data-i18n="captionWidth">字幕宽度</label>
+    <input type="range" id="captionWidth" min="20" max="100" step="5" />
+    <span class="muted" id="captionWidthVal" style="flex:0 0 auto; min-width:36px; text-align:right;"></span>
+  </div>
+  <div class="apihelp" data-i18n="captionWidthNote">只在没有原生字幕可对齐时生效：实时听译、以及仅翻译模式。</div>
 
   <div class="row">
     <label for="fontSize" data-i18n="fontSizePx">字号 (px)</label>

@@ -1,0 +1,111 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS content.js harness</title>
+<link rel="stylesheet" href="../overlay.css">
+<h1>YDS content.js harness</h1>
+<pre id="out">running…</pre>
+
+<div id="fake-player" style="position:relative;width:480px;height:270px;background:#222">
+  <video id="v" src="data:video/mp4;base64," style="width:100%;height:100%"></video>
+</div>
+
+<script>
+// chrome stub: storage.sync backed by a plain object, no-op messaging.
+const STORE = { ydsSettings: { enabled: true, secondLang: "en", bottomOffset: 20, fontSize: 22,
+                               color: "#ffffff", background: "rgba(0,0,0,0.6)",
+                               translationProvider: "google", apiKeys: {} } };
+window.chrome = {
+  runtime: { getURL: (f) => "/" + f, onMessage: { addListener() {} }, lastError: null },
+  storage: {
+    sync: {
+      get: (keys, cb) => setTimeout(() => cb(JSON.parse(JSON.stringify(STORE))), 0),
+      set: (obj, cb) => { Object.assign(STORE, obj); cb && cb(); }
+    },
+    onChanged: { addListener() {} }
+  }
+};
+
+// Mock adapter — stands in for a real platform so content.js's whole pipeline
+// runs: boot -> track list -> ingest -> native path -> render loop -> overlay.
+const MOCK = {
+  ingest: null,
+  cues: [
+    { start: 0,  end: 3,  text: "first line of dialogue." },
+    { start: 3,  end: 6,  text: "second line of dialogue." },
+    { start: 6,  end: 9,  text: "third line of dialogue." }
+  ]
+};
+</script>
+<script src="../i18n.js"></script>
+<script src="../platform.js"></script>
+<script>
+window.YDS_PLATFORMS = {
+  detect: () => "mock",
+  create: (id, ctx) => {
+    MOCK.ingest = ctx.ingest;
+    MOCK.onTrackList = ctx.onTrackList;
+    return {
+      id: "mock",
+      requiresCcForTracks: false,
+      looksLikeVideoPage: () => true,
+      getVideoId: () => "mock-video-1",
+      getVideoEl: () => document.getElementById("v"),
+      getContainer: () => document.getElementById("fake-player"),
+      isCcOn: () => true,
+      nativeLines: () => [],
+      observeTarget: () => document.getElementById("fake-player"),
+      start() {
+        // Fire immediately — before settings have loaded — to prove the
+        // parking/replay path works.
+        ctx.onTrackList([{ languageCode: "en", kind: "", name: "English" }]);
+        ctx.ingest({ cues: MOCK.cues, lang: "en", isAsr: false, isNativeTarget: true, key: "mock" });
+      },
+      requestTrack() {},
+      reset() {}
+    };
+  }
+};
+</script>
+<script>
+// The Browser pane never paints this tab, so rAF never fires. Alias it to a
+// timer so content.js's render loop actually runs under test.
+window.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 16);
+</script>
+<script src="../content.js"></script>
+<script>
+const results = [];
+const check = (n, p, d) => results.push({ n, p: !!p, d });
+const v = document.getElementById("v");
+
+setTimeout(() => {
+  const overlay = document.querySelector("#yt-dual-sub-overlay");
+  check("content.js parsed and booted without throwing", true, "");
+  check("overlay created inside the container",
+        overlay && overlay.parentElement === document.getElementById("fake-player"), "");
+  check("overlay uses the stored bottom offset", overlay && overlay.style.bottom === "20%", overlay && overlay.style.bottom);
+  check("drag handle present", !!(overlay && overlay.querySelector(".yds-drag-handle")), "");
+
+  const textAt = (t) => {
+    v.currentTime = t;                       // no media, but currentTime still reads back
+    Object.defineProperty(v, "currentTime", { get: () => t, configurable: true });
+    return new Promise(r => setTimeout(() => {
+      const o = document.querySelector("#yt-dual-sub-overlay");
+      r(o ? (o.querySelector(".yds-text") || {}).textContent : null);
+    }, 200));
+  };
+
+  textAt(1).then(a => {
+    check("renders the cue at t=1s", a === "first line of dialogue", JSON.stringify(a));
+    return textAt(4);
+  }).then(b => {
+    check("renders the cue at t=4s", b === "second line of dialogue", JSON.stringify(b));
+    return textAt(20);
+  }).then(c => {
+    check("renders nothing past the last cue", !c, JSON.stringify(c));
+    const pass = results.filter(r => r.p).length;
+    document.getElementById("out").textContent =
+      results.map(r => `${r.p ? "PASS" : "FAIL"}  ${r.n}${r.d ? "   [" + r.d + "]" : ""}`).join("\n")
+      + `\n\n${pass}/${results.length} passed`;
+  });
+}, 1200);
+</script>

@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>YDS platform.js harness</title>
+<h1>YDS platform.js harness</h1>
+<pre id="out">running…</pre>
+
+<!-- Stand-in for the Vimeo player DOM the adapter reads. -->
+<div class="vp-video-wrapper">
+  <div class="vp-video">
+    <video id="v"></video>
+  </div>
+  <div class="vp-captions">
+    <span class="CaptionsRenderer_module_captionsWindow__x">
+      <span class="CaptionsRenderer_module_captionsLine__x">first rendered line</span>
+      <span class="CaptionsRenderer_module_captionsLine__x">second rendered line</span>
+    </span>
+  </div>
+  <button id="cc-control-bar-button" data-cc-button="true" aria-pressed="true"></button>
+</div>
+
+<script>
+  // Minimal chrome stub — the adapter only uses runtime.getURL for the
+  // page-world script, which we let 404 harmlessly.
+  window.chrome = { runtime: { getURL: (f) => "/" + f } };
+</script>
+<script src="../platform.js"></script>
+<script>
+const VTT_URL = new URLSearchParams(location.search).get("vtt");
+const out = document.getElementById("out");
+const results = [];
+const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail });
+
+// Attach the real signed track so domTracks() has something to find.
+if (VTT_URL) {
+  const t = document.createElement("track");
+  t.src = VTT_URL;
+  t.srclang = "en-x-autogen";
+  t.label = "English (auto-generated)";
+  t.kind = "captions";
+  document.getElementById("v").appendChild(t);
+}
+
+let trackLists = [];
+let ingests = [];
+
+const ctx = {
+  log: (...a) => console.log("[ctx]", ...a),
+  settings: () => ({ enabled: true, secondLang: "zh-Hans" }),
+  langMatches: (a, b) => String(a).toLowerCase().split("-")[0] === String(b).toLowerCase().split("-")[0],
+  coalesce: (cues) => cues,
+  onTrackList: (t) => trackLists.push(t),
+  ingest: (p) => ingests.push(p)
+};
+
+const adapter = window.YDS_PLATFORMS.create("vimeo", ctx);
+adapter.start();
+
+setTimeout(() => {
+  // --- track discovery ---
+  const last = trackLists[trackLists.length - 1] || [];
+  check("onTrackList fired", trackLists.length > 0, `${trackLists.length} call(s)`);
+  check("track language normalised (en-x-autogen -> en)", last[0] && last[0].languageCode === "en", JSON.stringify(last));
+  check("auto-generated track marked kind=asr", last[0] && last[0].kind === "asr", last[0] && last[0].kind);
+
+  // --- cue ingestion / VTT parsing ---
+  const ing = ingests[0];
+  check("ingest fired", !!ing, `${ingests.length} call(s)`);
+  if (ing) {
+    const cues = ing.cues;
+    check("parsed a full track of cues", cues.length > 100, `${cues.length} cues`);
+    check("timings ascending and positive", cues.every((c, i) => c.end > c.start && (i === 0 || c.start >= cues[i - 1].start)), "");
+    check("no WEBVTT header leaked into a cue", !cues.some(c => /WEBVTT/.test(c.text)), "");
+    check("no cue identifiers leaked into text", !cues.some(c => /^\d+$/.test(c.text)), "");
+    check("no markup left in text", !cues.some(c => /[<>]|&[a-z]+;/i.test(c.text)), "");
+    check("isAsr set from -x-autogen", ing.isAsr === true, String(ing.isAsr));
+    check("isNativeTarget false for en vs zh-Hans", ing.isNativeTarget === false, String(ing.isNativeTarget));
+    check("first cue looks like speech", /[a-z]/i.test(cues[0].text), JSON.stringify(cues[0]));
+    check("last cue has a sane end time", cues[cues.length - 1].end > 10, String(cues[cues.length - 1].end));
+  }
+
+  // --- DOM readers ---
+  check("getVideoEl finds the player video", adapter.getVideoEl() === document.getElementById("v"), "");
+  check("getContainer finds .vp-video-wrapper",
+        adapter.getContainer() === document.querySelector(".vp-video-wrapper"), "");
+  check("isCcOn reads aria-pressed", adapter.isCcOn() === true, String(adapter.isCcOn()));
+  const lines = adapter.nativeLines();
+  check("nativeLines splits caption lines", lines.length === 2 && lines[0] === "first rendered line", JSON.stringify(lines));
+  document.getElementById("cc-control-bar-button").setAttribute("aria-pressed", "false");
+  check("isCcOn follows the button", adapter.isCcOn() === false, String(adapter.isCcOn()));
+
+  // --- URL shapes (regex only; location can't be faked here) ---
+  const idOf = (path) => (path.split("/").find(s => /^\d{6,}$/.test(s)) || null);
+  check("id from vimeo.com/859881652/37578b4a4e", idOf("/859881652/37578b4a4e") === "859881652", idOf("/859881652/37578b4a4e"));
+  check("id from player.vimeo.com/video/859881652", idOf("/video/859881652") === "859881652", idOf("/video/859881652"));
+  check("id from channels URL", idOf("/channels/staffpicks/859881652") === "859881652", idOf("/channels/staffpicks/859881652"));
+  check("no id on the homepage", idOf("/") === null, String(idOf("/")));
+
+  const pass = results.filter(r => r.pass).length;
+  out.textContent = results.map(r => `${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "   [" + r.detail + "]" : ""}`).join("\n")
+    + `\n\n${pass}/${results.length} passed`;
+  window.__RESULTS = { pass, total: results.length, results };
+}, 4000);
+</script>
