@@ -16,7 +16,12 @@
       --text-dim: #a3a3a3;
       --brand: #ff0033;
       --brand-2: #ff4d6d;
-      --border: rgba(255,255,255,0.08);
+      /* Three weights of edge. On a near-black page one weight cannot do all
+         three jobs: dividers should stay quiet, surfaces have to be findable,
+         and anything clickable needs WCAG 1.4.11's 3:1 against the page. */
+      --border: rgba(255,255,255,0.08);         /* dividers        1.2:1 */
+      --border-surface: rgba(255,255,255,0.22); /* cards, code     2.0:1 */
+      --border-control: rgba(255,255,255,0.34); /* buttons         3.1:1 */
     }
     * { box-sizing: border-box; }
     html, body {
@@ -52,7 +57,7 @@
     .lang-toggle {
       background: transparent;
       color: var(--text-dim);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-control);
       border-radius: 999px;
       padding: 5px 12px;
       font: inherit;
@@ -60,7 +65,11 @@
       cursor: pointer;
       margin-right: 12px;
     }
-    .lang-toggle:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+    .lang-toggle:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.55);
+    }
     .nav-right { display: flex; align-items: center; }
 
     /* Hero */
@@ -82,6 +91,7 @@
       max-width: 620px;
       margin: 0 auto 36px;
     }
+    .hero p.sub strong { color: #dcdcdc; font-weight: 600; }
     .cta {
       display: inline-flex; align-items: center; gap: 8px;
       background: var(--brand);
@@ -102,13 +112,17 @@
       font-weight: 600;
       font-size: 16px;
       margin-left: 12px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-control);
     }
-    .cta-secondary:hover { background: var(--bg-elev); text-decoration: none; }
+    .cta-secondary:hover {
+      background: rgba(255,255,255,0.09);
+      border-color: rgba(255,255,255,0.55);
+      text-decoration: none;
+    }
     /* Setup commands for the live-transcription service. */
     pre.cmd {
       background: #1e1e1e;
-      border: 1px solid rgba(255,255,255,0.14);
+      border: 1px solid var(--border-surface);
       border-radius: 8px;
       padding: 14px 16px;
       overflow-x: auto;
@@ -116,13 +130,48 @@
       color: #e6e6e6;
       margin: 12px 0;
     }
+    /* macOS / Windows switch above the setup commands. Deliberately not a pill:
+       the pills on this page all navigate somewhere, and this one only swaps
+       what is shown below it. A segmented control in the same corner radius and
+       monospace face as pre.cmd reads as part of the command block instead. */
+    .os-tabs {
+      display: inline-flex;
+      padding: 3px;
+      margin: 20px 0 2px;
+      background: #171717;
+      border: 1px solid var(--border-surface);
+      border-radius: 8px;
+    }
+    .os-tab {
+      padding: 6px 16px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #c8c8c8;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      cursor: pointer;
+      transition: color 0.12s ease, background 0.12s ease;
+    }
+    .os-tab:hover { color: var(--text); background: rgba(255,255,255,0.07); }
+    .os-tab[aria-selected="true"] {
+      /* Inverted rather than brand-red: on a page this dark, anything short of
+         a light fill disappears — but red here would read as "do something",
+         and this only chooses which commands are shown. */
+      background: var(--text);
+      color: #0f0f0f;
+      font-weight: 700;
+    }
+    .os-panel[hidden] { display: none; }
+    .os-panel ol { padding-left: 20px; margin: 12px 0; }
+    .os-panel ol li { margin: 18px 0; }
+    .os-panel ol li p { margin: 0 0 8px; }
     .features-2 {
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       max-width: 760px;
       margin: 0 auto;
     }
     .live-note {
-      border-left: 2px solid var(--border);
+      border-left: 2px solid var(--border-surface);
       padding-left: 14px;
       color: var(--text-dim);
       font-size: 14px;
@@ -133,7 +182,7 @@
       align-items: center;
       gap: 6px;
       color: var(--text-dim);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-surface);
       border-radius: 999px;
       padding: 4px 10px;
       font-size: 13px;
@@ -153,7 +202,7 @@
         linear-gradient(160deg, #47536b 0%, #8d7f6d 55%, #55504c 100%);
       border-radius: 12px;
       padding: 56px 24px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-surface);
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
       text-align: center;
       position: relative;
@@ -217,7 +266,7 @@
       background: var(--card);
       padding: 24px;
       border-radius: 12px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-surface);
     }
     .feature .icon {
       font-size: 24px;
@@ -271,7 +320,7 @@
       padding: 2px 6px;
       border-radius: 4px;
       font-size: 13px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-surface);
     }
     kbd {
       font-size: 12px;
@@ -281,7 +330,7 @@
     /* FAQ */
     details {
       background: var(--card);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-surface);
       border-radius: 10px;
       padding: 16px 20px;
       margin-bottom: 10px;
@@ -316,6 +365,13 @@
       border-top: 1px solid var(--border);
     }
     footer a { color: var(--text-dim); }
+    /* The name in the byline is a link; without a mark of its own it would be
+       indistinguishable from the dim text around it. */
+    footer a.more {
+      color: var(--text);
+      border-bottom: 1px solid rgba(255,255,255,0.28);
+    }
+    footer a.more:hover { border-bottom-color: var(--text); text-decoration: none; }
 
     @media (max-width: 640px) {
       .hero { padding: 50px 0 40px; }
@@ -345,8 +401,8 @@
     <div class="container">
       <h1 data-en="Dual subtitles for your videos">为视频添加双语字幕</h1>
       <div class="version-pill">v2.0.0</div>
-      <p class="sub" data-en="Currently supports YouTube, Vimeo and Bilibili. Uses the video's own subtitles plus free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek AI translation. Videos with no subtitles at all can be transcribed as they play.">
-        目前支持 YouTube、Vimeo 和 Bilibili。使用视频自带字幕 + Google 免费翻译，也可选 Claude / OpenAI / Gemini / DeepSeek AI 翻译。完全没有字幕的视频，可以边播边听译。
+      <p class="sub" data-en="Currently supports <strong>YouTube</strong>, <strong>Vimeo</strong> and <strong>Bilibili</strong>. Uses the video's own subtitles plus free Google Translate, with optional Claude / OpenAI / Gemini / DeepSeek AI translation. Videos with no subtitles at all can be transcribed as they play.">
+        目前支持 <strong>YouTube</strong>、<strong>Vimeo</strong> 和 <strong>Bilibili</strong>。使用视频自带字幕 + Google 免费翻译，也可选 Claude / OpenAI / Gemini / DeepSeek AI 翻译。完全没有字幕的视频，可以边播边听译。
       </p>
       <a class="cta" href="https://chromewebstore.google.com/detail/malocefbdblplamcmmmpilepcgllfmnf" target="_blank" rel="noopener" data-en="Add to Chrome">
         添加到 Chrome
@@ -484,18 +540,66 @@
       </div>
 
       <h3 style="margin-top:36px" data-en="Install the local service">安装本地识别服务</h3>
-      <p data-en="Needs python3 on your system. One command, no clone — it creates a happysubs-server folder here, builds the Python environment, and downloads the model from the sherpa-onnx project's own release (about 500MB compressed, 193MB kept).">需要系统装有 python3。一条命令，不用 clone 仓库——脚本会在当前位置建一个 <code>happysubs-server</code> 文件夹，装好 Python 环境，并从 sherpa-onnx 项目自己的 release 下载模型（约 500MB 压缩包，解压后保留 193MB）。</p>
+      <p data-en="Needs Python 3 on your system. The extension itself is the same everywhere — this local service is the only part that differs by operating system.">需要系统装有 Python 3。插件本身各平台通用，只有这个本地服务的安装方式分系统。</p>
 
-      <pre class="cmd">curl -fsSL https://raw.githubusercontent.com/huanshuowang/happysubs/main/setup.sh | bash</pre>
+      <div class="os-tabs" role="tablist" aria-label="Operating system">
+        <button type="button" class="os-tab" data-os="unix" role="tab" aria-selected="true">macOS / Linux</button>
+        <button type="button" class="os-tab" data-os="win" role="tab" aria-selected="false">Windows</button>
+      </div>
 
-      <p data-en="Then start it, and leave it running while you watch:">装好后启动它，看视频期间让它一直开着：</p>
+      <div class="os-panel" data-os="unix" role="tabpanel">
+        <p data-en="One command, no clone — it creates a happysubs-server folder here, builds the Python environment, and downloads the model from the sherpa-onnx project's own release (about 500MB compressed, 193MB kept).">一条命令，不用 clone 仓库——脚本会在当前位置建一个 <code>happysubs-server</code> 文件夹，装好 Python 环境，并从 sherpa-onnx 项目自己的 release 下载模型（约 500MB 压缩包，解压后保留 193MB）。</p>
 
-      <pre class="cmd">cd happysubs-server &amp;&amp; .venv/bin/python server.py</pre>
+        <pre class="cmd">curl -fsSL https://raw.githubusercontent.com/huanshuowang/happysubs/main/setup.sh | bash</pre>
 
-      <p data-en="When it prints 监听 ws://127.0.0.1:8765 it is ready. In the extension popup, switch to the Live transcribe tab and press start.">看到 <code>监听 ws://127.0.0.1:8765</code> 就绪。然后在插件弹窗切到「实时听译」标签，点开启。</p>
+        <p data-en="Then start it, and leave it running while you watch:">装好后启动它，看视频期间让它一直开着：</p>
 
-      <p class="live-note" data-en="Notes: press play on the video first — browsers only allow audio processing after you interact with the page. The service handles one page at a time, so several tabs will fight over it. Port already in use: run lsof -ti:8765 | xargs kill and start again. The model and Python environment live in that folder; on a new machine just run the command again. If you have cloned the whole repository, running ./setup.sh from its root does the same thing.">
-        几点注意：先点一下视频<strong>播放</strong>，浏览器要求有用户交互才允许处理音频。服务端一次只服务一个页面，同时开多个标签页会互相干扰。端口被占用时执行 <code>lsof -ti:8765 | xargs kill</code> 再重启。模型和 Python 环境都在这个文件夹里，换机器重跑一次上面那条命令即可。已经 clone 了整个仓库的话，在仓库根目录跑 <code>./setup.sh</code> 效果一样。
+        <pre class="cmd">cd happysubs-server &amp;&amp; .venv/bin/python server.py</pre>
+
+        <p class="live-note" data-en="Port already in use: run lsof -ti:8765 | xargs kill and start again. If you have cloned the whole repository, running ./setup.sh from its root does the same thing.">端口被占用时执行 <code>lsof -ti:8765 | xargs kill</code> 再重启。已经 clone 了整个仓库的话，在仓库根目录跑 <code>./setup.sh</code> 效果一样。</p>
+      </div>
+
+      <div class="os-panel" data-os="win" role="tabpanel" hidden>
+        <p data-en="There is no shell script for Windows — these three steps do the same thing the script does on macOS.">Windows 上没有现成的脚本，下面三步做的是和 macOS 那个脚本一样的事。</p>
+        <ol>
+          <li>
+            <p data-en='Install Python from <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a>, and tick <strong>Add python.exe to PATH</strong> in the installer.'>到 <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a> 下载 Windows 安装包，安装时记得勾上 <strong>Add python.exe to PATH</strong>。</p>
+          </li>
+          <li>
+            <p data-en="Open PowerShell (Start menu → type PowerShell) and paste the whole block below. It creates a happysubs-server folder in the current directory, builds the Python environment, and downloads the four model files — about 190MB, nothing to unpack.">打开 PowerShell（开始菜单搜 PowerShell），把下面整段一起粘进去回车。它会在当前目录建一个 <code>happysubs-server</code> 文件夹，装好 Python 环境，并下载 4 个模型文件——约 190MB，不用解压。</p>
+            <pre class="cmd"># Without this, PowerShell's progress bar makes large downloads roughly ten times slower.
+$ProgressPreference = "SilentlyContinue"
+
+mkdir happysubs-server -Force | Out-Null; cd happysubs-server
+$repo = "https://raw.githubusercontent.com/huanshuowang/happysubs/main/server"
+iwr "$repo/server.py" -OutFile server.py
+iwr "$repo/requirements.txt" -OutFile requirements.txt
+
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# The model, straight from the sherpa-onnx author's own Hugging Face repo.
+mkdir model -Force | Out-Null; cd model
+$hf = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/main"
+foreach ($f in "tokens.txt", "encoder-epoch-99-avg-1.int8.onnx",
+               "decoder-epoch-99-avg-1.int8.onnx", "joiner-epoch-99-avg-1.int8.onnx") {
+  iwr "$hf/$f" -OutFile $f
+}
+cd ..</pre>
+          </li>
+          <li>
+            <p data-en="Start it, and leave it running while you watch:">启动它，看视频期间让这个窗口一直开着：</p>
+            <pre class="cmd">.\.venv\Scripts\python.exe server.py</pre>
+          </li>
+        </ol>
+
+        <p class="live-note" data-en="Windows notes: if <code>py -3</code> is not recognised, use <code>python</code> instead — the Microsoft Store build of Python does not install the py launcher. Port already in use: <code>netstat -ano | findstr :8765</code> to find the PID, then <code>taskkill /PID &lt;pid&gt; /F</code>. If huggingface.co is unreachable from your network, swap it for <code>hf-mirror.com</code> in the block above — the paths are identical.">Windows 上几点：<code>py -3</code> 提示找不到的话改用 <code>python</code>——从微软商店装的 Python 不带 py 启动器。端口被占用时用 <code>netstat -ano | findstr :8765</code> 查到 PID，再 <code>taskkill /PID &lt;PID&gt; /F</code>。如果访问 huggingface.co 不通，把上面那段里的 <code>huggingface.co</code> 换成 <code>hf-mirror.com</code> 即可，路径完全一样。</p>
+      </div>
+
+      <p style="margin-top:24px" data-en="When it prints 监听 ws://127.0.0.1:8765 it is ready. In the extension popup, switch to the Live transcribe tab and press start.">看到 <code>监听 ws://127.0.0.1:8765</code> 就绪。然后在插件弹窗切到「实时听译」标签，点开启。</p>
+
+      <p class="live-note" data-en="Notes: press play on the video first — browsers only allow audio processing after you interact with the page. The service handles one page at a time, so several tabs will fight over it. The model and Python environment live in that folder; on a new machine just run the setup again.">
+        几点注意：先点一下视频<strong>播放</strong>，浏览器要求有用户交互才允许处理音频。服务端一次只服务一个页面，同时开多个标签页会互相干扰。模型和 Python 环境都在那个文件夹里，换机器重跑一次安装即可。
       </p>
     </div>
   </section>
@@ -503,7 +607,6 @@
   <section id="changelog">
     <div class="container">
       <h2 data-en="Changelog">更新日志</h2>
-      <p class="section-desc" data-en="The published version is 1.3.1; everything since is 2.0.0.">商店上架的是 1.3.1，之后的改动都归在 2.0.0。</p>
 
       <details open>
         <summary data-en="2.0.0 — Bilibili, live transcription, Vimeo">2.0.0 — B 站、实时听译、Vimeo</summary>
@@ -561,7 +664,7 @@
 
   <footer>
     <div class="container">
-      <p>Made by Happy</p>
+      <p>Made by <a class="more" href="https://huanshuowang.com/projects-by-happy/" target="_blank" rel="noopener">Happy</a></p>
     </div>
   </footer>
 
@@ -607,6 +710,30 @@
         try { localStorage.setItem(STORAGE_KEY, next); } catch {}
         apply(next);
       });
+    })();
+
+    // macOS / Windows switch for the setup commands. Delegated from the document
+    // so it keeps working after the language toggle rewrites the panels' innerHTML.
+    (function () {
+      function show(os) {
+        document.querySelectorAll(".os-tab").forEach(b => {
+          b.setAttribute("aria-selected", String(b.dataset.os === os));
+        });
+        document.querySelectorAll(".os-panel").forEach(p => {
+          p.hidden = p.dataset.os !== os;
+        });
+      }
+
+      document.addEventListener("click", (e) => {
+        const tab = e.target.closest(".os-tab");
+        if (tab) show(tab.dataset.os);
+      });
+
+      // Windows visitors should not have to notice the switch to find their own
+      // instructions; everyone else keeps the shell script they came for.
+      if (/win/i.test(navigator.platform || "") || /Windows NT/.test(navigator.userAgent)) {
+        show("win");
+      }
     })();
   </script>
 
